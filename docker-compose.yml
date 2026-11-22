@@ -1,0 +1,12 @@
+services:
+  kifli-otthon:
+    build: .
+    container_name: kifli-otthon
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      # Belső hálózaton / Tailscale VPN-en elérhető port (pl. http://100.x.y.z:8085)
+      - "${PORT:-8085}:8085"
+    volumes:
+      - ./data:/app/data
