@@ -129,14 +129,22 @@ def create_app(custom_settings: Settings | None = None, enable_background: bool 
     app.state.runtime = runtime
     app.state.otthon_mcp = otthon_mcp
 
-    # Saját bejövő MCP végpont (Streamable HTTP: /mcp és /mcp/<PIN>) Claude Remote / Desktop számára!
+    # Saját bejövő MCP végpont (Streamable HTTP: /mcp és /mcp/<TOKEN>) Claude Remote / Desktop számára!
     for r in otthon_mcp_starlette.routes:
         if isinstance(r, Route) and r.path == "/mcp":
-            wrapped_mcp = OptionalPinASGIWrapper(r.endpoint, settings.app_access_pin)
-            app.router.routes.append(Route("/mcp", endpoint=wrapped_mcp))
-            app.router.routes.append(Route("/mcp/", endpoint=wrapped_mcp))
-            app.router.routes.append(Route("/mcp/{pin}", endpoint=wrapped_mcp))
-            app.router.routes.append(Route("/mcp/{pin}/", endpoint=wrapped_mcp))
+            wrapped_mcp = OptionalPinASGIWrapper(r.endpoint, settings.mcp_access_token)
+            app.router.routes.append(
+                Route("/mcp", endpoint=wrapped_mcp, methods=["GET", "POST", "DELETE", "OPTIONS", "HEAD"])
+            )
+            app.router.routes.append(
+                Route("/mcp/", endpoint=wrapped_mcp, methods=["GET", "POST", "DELETE", "OPTIONS", "HEAD"])
+            )
+            app.router.routes.append(
+                Route("/mcp/{pin}", endpoint=wrapped_mcp, methods=["GET", "POST", "DELETE", "OPTIONS", "HEAD"])
+            )
+            app.router.routes.append(
+                Route("/mcp/{pin}/", endpoint=wrapped_mcp, methods=["GET", "POST", "DELETE", "OPTIONS", "HEAD"])
+            )
 
     async def verify_pin(
         request: Request, x_app_pin: str | None = Header(default=None)

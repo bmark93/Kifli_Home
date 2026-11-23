@@ -15,46 +15,96 @@ from app.db import DAYS_HU, Database
 
 class OptionalPinASGIWrapper:
     """
-    Ha a .env-ben be van állítva APP_ACCESS_PIN, akkor az /mcp (és /mcp/<PIN>) végpont megköveteli:
-    - path paraméterként: /mcp/<PIN>  (ajánlott Claude Remote MCP / mobil appokhoz!)
-    - VAGY Authorization: Bearer <PIN>
-    - VAGY X-App-Pin: <PIN>
-    - VAGY ?pin=<PIN>
-    Ha nincs APP_ACCESS_PIN (pl. zárt Tailscale/LAN hálózaton), szabadon hívható.
+    Claude Remote MCP & Streamable HTTP kompatibilitási + biztonsági réteg:
+    1. Külön MCP_ACCESS_TOKEN ellenőrzés (path: /mcp/<TOKEN>, Bearer, X-App-Pin vagy ?pin=),
+       így a belső LAN Web UI nem kér PIN-t, ha csak MCP_ACCESS_TOKEN van beállítva.
+    2. OPTIONS (CORS preflight) -> azonnali 204 No Content.
+    3. GET / DELETE -> azonnali 405 Method Not Allowed (stateless módban a mcp SDK GET-re
+       végtelen üres SSE streamet nyitna, amin a Claude Remote MCP időtúllépéssel elhasal!).
+    4. POST Accept fejléc normalizálás -> akkor is azonnali 200 OK application/json választ ad,
+       ha a kliens csak `Accept: */*` vagy `Accept: application/json` fejlécet küld.
     """
 
-    def __init__(self, app: ASGIApp, expected_pin: str) -> None:
+    CORS_HEADERS = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Accept, Authorization, X-App-Pin, Mcp-Session-Id, MCP-Protocol-Version",
+        "Access-Control-Expose-Headers": "Mcp-Session-Id",
+    }
+
+    def __init__(self, app: ASGIApp, expected_token: str) -> None:
         self.app = app
-        self.expected_pin = expected_pin
+        self.expected_token = expected_token
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] == "http":
-            path_params = scope.get("path_params") or {}
-            path_pin = str(path_params.get("pin", "")).strip("/")
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
 
-            if self.expected_pin:
-                req = Request(scope)
-                auth_hdr = req.headers.get("authorization", "")
-                bearer = auth_hdr[7:].strip() if auth_hdr.lower().startswith("bearer ") else ""
-                supplied = (
-                    path_pin
-                    or bearer
-                    or req.headers.get("x-app-pin", "").strip()
-                    or req.query_params.get("pin", "").strip()
+        method = str(scope.get("method", "GET")).upper()
+
+        # 1. CORS preflight azonnal
+        if method == "OPTIONS":
+            resp = JSONResponse({}, status_code=204, headers=self.CORS_HEADERS)
+            await resp(scope, receive, send)
+            return
+
+        # 2. Token ellenőrzés (ha MCP_ACCESS_TOKEN be van állítva)
+        path_params = scope.get("path_params") or {}
+        path_token = str(path_params.get("pin", "")).strip("/")
+
+        if self.expected_token:
+            req = Request(scope)
+            auth_hdr = req.headers.get("authorization", "")
+            bearer = auth_hdr[7:].strip() if auth_hdr.lower().startswith("bearer ") else ""
+            supplied = (
+                path_token
+                or bearer
+                or req.headers.get("x-app-pin", "").strip()
+                or req.query_params.get("pin", "").strip()
+            )
+            if not supplied or not hmac.compare_digest(supplied, self.expected_token):
+                resp = JSONResponse(
+                    {"error": "Unauthorized: missing or invalid MCP_ACCESS_TOKEN"},
+                    status_code=401,
+                    headers=self.CORS_HEADERS,
                 )
-                if not supplied or not hmac.compare_digest(supplied, self.expected_pin):
-                    resp = JSONResponse(
-                        {"error": "Unauthorized: missing or invalid APP_ACCESS_PIN"}, status_code=401
-                    )
-                    await resp(scope, receive, send)
-                    return
+                await resp(scope, receive, send)
+                return
 
-            # Ha /mcp/<PIN> útvonalon jött, normalizáljuk /mcp-re a belső MCP handler számára
-            if path_pin:
-                scope = dict(scope)
-                scope["path"] = "/mcp"
+        # 3. Stateless Streamable HTTP: GET/DELETE-re azonnali 405 (ahogy a hivatalos Kifli MCP is!)
+        #    Különben a Claude Remote MCP GET SSE streamje 0 bájttal örökre lógna és timeoutolna.
+        if method in ("GET", "DELETE", "HEAD"):
+            resp = JSONResponse(
+                {"error": "Method Not Allowed: use POST for stateless MCP Streamable HTTP"},
+                status_code=405,
+                headers={**self.CORS_HEADERS, "Allow": "POST, OPTIONS"},
+            )
+            await resp(scope, receive, send)
+            return
 
-        await self.app(scope, receive, send)
+        # 4. Path normalizálás (/mcp/<TOKEN> -> /mcp) + Accept fejléc normalizálás
+        #    (hogy `Accept: */*` vagy hiányzó Accept esetén se lógjon/dobjon 406-ot az MCP SDK!)
+        new_scope = dict(scope)
+        if path_token or str(scope.get("path", "")).rstrip("/") == "/mcp":
+            new_scope["path"] = "/mcp"
+
+        orig_headers = list(scope.get("headers") or [])
+        filtered_headers = [(k, v) for (k, v) in orig_headers if k.lower() != b"accept"]
+        filtered_headers.append((b"accept", b"application/json, text/event-stream"))
+        new_scope["headers"] = filtered_headers
+
+        async def _send_with_cors(message: dict[str, Any]) -> None:
+            if message.get("type") == "http.response.start":
+                hdrs = list(message.get("headers") or [])
+                existing_keys = {k.lower() for k, _ in hdrs}
+                for ck, cv in self.CORS_HEADERS.items():
+                    if ck.lower().encode("latin-1") not in existing_keys:
+                        hdrs.append((ck.lower().encode("latin-1"), cv.encode("latin-1")))
+                message = {**message, "headers": hdrs}
+            await send(message)
+
+        await self.app(new_scope, receive, _send_with_cors)
 
 
 def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServer, Any]:

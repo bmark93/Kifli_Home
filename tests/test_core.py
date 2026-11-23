@@ -10,7 +10,7 @@ from app.kifli_mcp import KifliMCPManager, sanitize_json_schema_for_llm
 from app.main import create_app
 
 
-def _make_settings(tmp_path: Path, pin: str = "") -> Settings:
+def _make_settings(tmp_path: Path, pin: str = "", mcp_token: str = "") -> Settings:
     return Settings(
         llm_provider="gemini",
         llm_base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
@@ -25,6 +25,7 @@ def _make_settings(tmp_path: Path, pin: str = "") -> Settings:
         weekly_cron_hour=8,
         weekly_cron_minute=0,
         app_access_pin=pin,
+        mcp_access_token=mcp_token or pin,
         data_dir=tmp_path,
         port=8085,
     )
@@ -265,23 +266,51 @@ def test_otthon_mcp_server_tools(tmp_path: Path) -> None:
     saved_titles = [r["title"] for r in app.state.db.list_recipes()]
     assert "Finomfőzelék" in saved_titles
 
-    # Path-alapú /mcp/<PIN> teszt Claude Remote MCP klienshez (json_response=True)
-    pin_settings = _make_settings(tmp_path, pin="SecretToken999")
-    pin_app = create_app(custom_settings=pin_settings, enable_background=False)
-    with TestClient(pin_app) as client:
-        headers = {"Accept": "application/json, text/event-stream"}
+    # Teljes Claude.ai Remote MCP handshake + szétválasztott MCP_ACCESS_TOKEN vs APP_ACCESS_PIN teszt
+    # Csak MCP_ACCESS_TOKEN van beállítva, APP_ACCESS_PIN üres -> belső Web UI NEM kér PIN-t!
+    mcp_only_settings = _make_settings(tmp_path, pin="", mcp_token="SecretToken999")
+    mcp_only_app = create_app(custom_settings=mcp_only_settings, enable_background=False)
+    with TestClient(mcp_only_app) as client:
+        # 1. Belső Web UI szabadon elérhető PIN popup nélkül
+        assert client.get("/api/status").status_code == 200
+
+        # 2. Publikus /mcp token nélkül 401
         r_unauth = client.post(
             "/mcp",
-            headers=headers,
+            headers={"Accept": "*/*"},
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
         )
         assert r_unauth.status_code == 401
 
-        r_ok = client.post(
+        # 3. GET és DELETE azonnali 405 (soha nem lóg üres SSE streamen!)
+        assert client.get("/mcp/SecretToken999").status_code == 405
+        assert client.delete("/mcp/SecretToken999").status_code == 405
+        assert client.options("/mcp/SecretToken999").status_code == 204
+
+        # 4. POST initialize akár `Accept: */*` fejléccel is azonnali 200 OK application/json!
+        r_init = client.post(
             "/mcp/SecretToken999",
-            headers=headers,
+            headers={"Accept": "*/*"},
+            json={
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "clientInfo": {"name": "claude-ai", "version": "0.1.0"},
+                },
+            },
+        )
+        assert r_init.status_code == 200
+        assert "application/json" in r_init.headers.get("content-type", "")
+        assert r_init.json()["result"]["serverInfo"]["name"] == "kifli-otthon"
+
+        # 5. POST tools/list -> 13 tool JSON-ban
+        r_tools = client.post(
+            "/mcp/SecretToken999",
+            headers={"Accept": "application/json"},
             json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
         )
-        assert r_ok.status_code == 200
-        payload = r_ok.json()
-        assert len(payload["result"]["tools"]) >= 13
+        assert r_tools.status_code == 200
+        assert len(r_tools.json()["result"]["tools"]) == 13

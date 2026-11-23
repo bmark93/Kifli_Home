@@ -24,6 +24,7 @@ class Settings:
     weekly_cron_hour: int
     weekly_cron_minute: int
     app_access_pin: str
+    mcp_access_token: str
     data_dir: Path
     port: int
 
@@ -77,6 +78,10 @@ def load_settings() -> Settings:
         weekly_cron_hour=int(os.getenv("WEEKLY_MENU_CRON_HOUR", "8")),
         weekly_cron_minute=int(os.getenv("WEEKLY_MENU_CRON_MINUTE", "0")),
         app_access_pin=os.getenv("APP_ACCESS_PIN", "").strip(),
+        mcp_access_token=(
+            os.getenv("MCP_ACCESS_TOKEN", "").strip()
+            or os.getenv("APP_ACCESS_PIN", "").strip()
+        ),
         data_dir=data_dir,
         port=int(os.getenv("PORT", "8085")),
     )
