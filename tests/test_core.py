@@ -306,11 +306,79 @@ def test_otthon_mcp_server_tools(tmp_path: Path) -> None:
         assert "application/json" in r_init.headers.get("content-type", "")
         assert r_init.json()["result"]["serverInfo"]["name"] == "kifli-otthon"
 
-        # 5. POST tools/list -> 13 tool JSON-ban
+        # 5. POST tools/list -> 16 tool JSON-ban (új: set_recipe_image, set_recipe_healthy_score, reset_weekly_menu)
         r_tools = client.post(
             "/mcp/SecretToken999",
             headers={"Accept": "application/json"},
             json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
         )
         assert r_tools.status_code == 200
-        assert len(r_tools.json()["result"]["tools"]) == 13
+        assert len(r_tools.json()["result"]["tools"]) == 16
+
+
+def test_recipe_image_healthy_score_and_weekly_reset(tmp_path: Path) -> None:
+    import asyncio
+    import base64
+
+    settings = _make_settings(tmp_path)
+    app = create_app(custom_settings=settings, enable_background=False)
+
+    # Minimális 1x1 PNG bájtban
+    tiny_png = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+    )
+
+    with TestClient(app) as client:
+        # 1. Recept felvétel healthy_score=5-tel
+        rec = client.post(
+            "/api/recipes",
+            json={
+                "title": "Avokádós pirítós",
+                "categories": ["reggeli"],
+                "servings": 2,
+                "healthy_score": 5,
+                "ingredients": [{"name": "avokádó", "quantity": 1, "unit": "db"}],
+            },
+        ).json()
+        rid = rec["id"]
+        assert rec["healthy_score"] == 5
+
+        # 2. Képfeltöltés REST API-n keresztül (multipart) + visszatöltés /uploads alól
+        up = client.post(
+            f"/api/recipes/{rid}/image",
+            files={"file": ("avo.png", tiny_png, "image/png")},
+        )
+        assert up.status_code == 200
+        img_url = up.json()["image_url"]
+        assert img_url.startswith("/uploads/recipes/")
+        assert client.get(img_url).status_code == 200
+
+        # 3. MCP set_recipe_healthy_score + set_recipe_image (base64)
+        async def _mcp_updates() -> None:
+            mcp_srv = app.state.otthon_mcp
+            await mcp_srv.call_tool("set_recipe_healthy_score", {"recipe_id": rid, "healthy_score": 4})
+            await mcp_srv.call_tool(
+                "set_recipe_image",
+                {
+                    "recipe_id": rid,
+                    "image_base64": base64.b64encode(tiny_png).decode("ascii"),
+                    "mime_type": "image/png",
+                },
+            )
+
+        asyncio.run(_mcp_updates())
+        updated_rec = [r for r in app.state.db.list_recipes() if r["id"] == rid][0]
+        assert updated_rec["healthy_score"] == 4
+        assert updated_rec["image_url"].startswith("/uploads/recipes/")
+
+        # 4. Heti menü beállítása, majd RESET 0 AI tokennel
+        client.put(
+            "/api/weekly-plan/slot",
+            json={"days": ["hetfo", "kedd"], "meal_type": "reggeli", "recipe_id": rid},
+        )
+        assert app.state.db.get_weekly_plan()["days"]["hetfo"]["reggeli"]["title"] == "Avokádós pirítós"
+
+        reset_resp = client.post("/api/weekly-plan/reset")
+        assert reset_resp.status_code == 200
+        assert reset_resp.json()["plan"]["days"]["hetfo"] == {}
+        assert reset_resp.json()["aggregated_shopping"]["recipe_and_adhoc_items"] == []

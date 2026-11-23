@@ -17,11 +17,13 @@ SYSTEM_PROMPT_HU = """Te vagy az otthoni privát Séf és Kifli.hu Bevásárló-
 Mindig természetes, barátságos, tömör magyar nyelven válaszolj (tegeződve).
 
 FŐ SZABÁLYOK ÉS MŰKÖDÉS:
-1. KATEGÓRIÁK ÉS HETI MENÜ:
-   - A receptek 3 étkezési kategóriába tartozhatnak: `reggeli`, `ebed`, `vacsora`.
+1. KATEGÓRIÁK, KÉSZLET-ELLENŐRZÉS ÉS HEALTHY SCORE A HETI MENÜBEN:
+   - A receptek 3 étkezési kategóriába tartozhatnak: `reggeli`, `ebed`, `vacsora`, és mindegyikhez tartozik egy `healthy_score` (1 = bűnözős/nehéz .. 5 = szuper-egészséges).
    - Amikor heti menüt tervezel (Hétfő–Vasárnap, napi 3 étkezés):
+     * **KÖTELEZŐ KIFLI KÉSZLET-ELLENŐRZÉS:** Ha a Kifli MCP aktív, mielőtt elmented a menüt, ellenőrizd a `kifli__batch_search_products` eszközzel a kiszemelt receptek kulcsfontosságú/szezonális/speciális alapanyagait (pl. frankfurti levesnél a *kelkáposzta*, halas ételnél a hal, speciális zöldségek/gyümölcsök)! **Ha egy étel kulcs-alapanyaga jelenleg NINCS készleten vagy nem kapható a Kiflin, azt a receptet NE ajánld fel erre a hétre** — válassz helyette másik receptet, aminek minden fő hozzávalója elérhető! Ha emiatt kihagytál egy receptet, röviden jelezd a válaszodban!
+     * **KIEGYENSÚLYOZOTT HEALTHY SCORE:** Figyelj rá, hogy a heti menü egészségesen kiegyensúlyozott legyen (a heti átlag `healthy_score` legyen legalább **3.3–3.5**)! Ne tegyél egymás után több 1–2-es nehéz ételt — ha az ebéd 2-es házias fogás, a reggeli vagy vacsora legyen 4–5-ös könnyű/egészséges!
      * Válogass változatosan a mentett receptekből (egy nagyobb főzős ebéd nyugodtan szerepelhet 2 egymást követő napon is, hogy praktikus és olcsó legyen!).
-     * Kötelezően tegyél bele **+1 db ÚJ receptajánlást** (`is_recommendation: true`, egy olyan finom ételt, ami még nincs a saját receptek között — ha a Kifli MCP elérhető, akár az aktuális Kifli akciók/receptek inspirációja alapján, és töltsd ki hozzá a `custom_ingredients` hozzávalókat!).
+     * Kötelezően tegyél bele **+1 db ÚJ receptajánlást** (`is_recommendation: true`, egy olyan finom és lehetőleg 4–5 healthy score-os ételt, ami még nincs a saját receptek között, a hozzávalói pedig tényleg kaphatók a Kiflin — töltsd ki hozzá a `custom_ingredients` hozzávalókat!).
      * Mindig mentsd el a kész tervet a `save_full_weekly_plan` eszközzel!
      * A javaslat végén mindig sorold fel az Általános / Háztartási listán szereplő `PENDING` tételeket is!
 
@@ -81,6 +83,10 @@ LOCAL_TOOLS_SPEC: list[dict[str, Any]] = [
                         "description": "Kategóriák listája: reggeli, ebed, vacsora",
                     },
                     "servings": {"type": "integer", "description": "Adagszám (pl. 2 vagy 4)"},
+                    "healthy_score": {
+                        "type": "integer",
+                        "description": "Egészségességi pontszám 1 (nehéz/bűnözős) és 5 (szuper-egészséges) között",
+                    },
                     "instructions": {"type": "string", "description": "Rövid elkészítési leírás"},
                     "ingredients": {
                         "type": "array",
@@ -389,6 +395,7 @@ class ChefShoppingAgent:
                 ingredients=args.get("ingredients", []),
                 servings=int(args.get("servings", 2)),
                 instructions=args.get("instructions", ""),
+                healthy_score=int(args.get("healthy_score", 3) or 3),
             )
 
         if name == "get_current_weekly_plan":
@@ -542,10 +549,10 @@ class ChefShoppingAgent:
     async def generate_monday_weekly_proposal(self) -> str:
         prompt = (
             "Készíts nekünk egy friss heti menütervezetet erre a hétre (Hétfőtől Vasárnapig: reggeli, ebéd, vacsora)! "
-            "1) Nézd meg a mentett receptjeinket (`list_saved_recipes`) és az Általános/Háztartási listánkat (`get_current_weekly_plan`). "
-            "2) Ha a Kifli MCP be van jelentkezve, nézz körül röviden az akciós termékek vagy receptötletek között is inspirációért. "
-            "3) Állítsd össze a heti menüt a saját receptekből + pontosan 1 db izgalmas ÚJ receptajánlással (`is_recommendation=true`, kitöltött `custom_ingredients`-szel), és mentsd el a `save_full_weekly_plan` eszközzel! "
-            "4) Köszönj nekünk hétfő reggel, mutasd be áttekinthetően a heti menüt, emeld ki a 🌟 +1 ajánlást, sorold fel mi van az 🧻 Általános listán, és kérdezd meg: 'Mit szólsz hozzá? Módosítsunk valamin, vagy összerakhatom a Kifli kosarat?'"
+            "1) Nézd meg a mentett receptjeinket (`list_saved_recipes` — nézd a `healthy_score` értékeket is!) és az Általános/Háztartási listánkat (`get_current_weekly_plan`). "
+            "2) Ha a Kifli MCP be van jelentkezve, KÖTELEZŐEN ellenőrizd a `kifli__batch_search_products` eszközzel a kiszemelt receptek fő/szezonális alapanyagait (pl. kelkáposzta, friss hal, speciális zöldség): ha egy fő hozzávaló NINCS készleten a Kiflin, NE ajánld fel azt az ételt erre a hétre! "
+            "3) Állítsd össze a heti menüt kiegyensúlyozott `healthy_score` elosztással (heti átlag >= 3.3, váltogasd a könnyű 4–5-ös és a házias 2–3-as ételeket) + pontosan 1 db izgalmas ÚJ receptajánlással (`is_recommendation=true`, kitöltött `custom_ingredients`-szel, aminek minden hozzávalója kapható a Kiflin), és mentsd el a `save_full_weekly_plan` eszközzel! "
+            "4) Köszönj nekünk, mutasd be áttekinthetően a heti menüt (röviden jelezve a heti átlag healthy score-t és ha valamit készlethiány miatt ki kellett hagyni), emeld ki a 🌟 +1 ajánlást, sorold fel mi van az 🧻 Általános listán, és kérdezd meg: 'Mit szólsz hozzá? Módosítsunk valamin, vagy összerakhatom a Kifli kosarat?'"
         )
         return await self.chat(prompt, source="scheduler")
 
@@ -564,7 +571,7 @@ class ChefShoppingAgent:
         extract_prompt = (
             "Nyerj ki az alábbi szövegből/HTML-ből egyetlen receptet szigorúan JSON formátumban!\n"
             "Sémanév-kulcsok:\n"
-            '{"title": "...", "categories": ["reggeli"|"ebed"|"vacsora"], "servings": 2, '
+            '{"title": "...", "categories": ["reggeli"|"ebed"|"vacsora"], "servings": 2, "healthy_score": 3, '
             '"instructions": "rövid magyar összefoglaló", '
             '"ingredients": [{"name": "...", "quantity": 1.0, "unit": "g|dkg|kg|ml|dl|l|db|ek|tk|csipet", "is_staple": false}]}\n\n'
             f"Forrás:\n{raw_content}"
@@ -587,6 +594,7 @@ class ChefShoppingAgent:
             title=parsed.get("title", "Importált recept"),
             categories=parsed.get("categories", ["ebed"]),
             servings=int(parsed.get("servings", 2)),
+            healthy_score=int(parsed.get("healthy_score", 3) or 3),
             instructions=parsed.get("instructions", ""),
             source_url=source_url,
             ingredients=parsed.get("ingredients", []),

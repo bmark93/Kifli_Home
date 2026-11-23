@@ -84,6 +84,8 @@ class Database:
                     servings INTEGER NOT NULL DEFAULT 2,
                     instructions TEXT NOT NULL DEFAULT '',
                     source_url TEXT NOT NULL DEFAULT '',
+                    image_url TEXT NOT NULL DEFAULT '',
+                    healthy_score INTEGER NOT NULL DEFAULT 3,
                     created_at TEXT NOT NULL DEFAULT (datetime('now'))
                 );
 
@@ -149,6 +151,16 @@ class Database:
                 );
                 """
             )
+
+            # Zökkenőmentes séma-migráció meglévő SQLite DB-hez (NAS adatmegőrzés)
+            recipe_cols = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(recipes)").fetchall()
+            }
+            if "image_url" not in recipe_cols:
+                conn.execute("ALTER TABLE recipes ADD COLUMN image_url TEXT NOT NULL DEFAULT ''")
+            if "healthy_score" not in recipe_cols:
+                conn.execute("ALTER TABLE recipes ADD COLUMN healthy_score INTEGER NOT NULL DEFAULT 3")
 
             existing_staples = conn.execute("SELECT COUNT(*) AS c FROM staples").fetchone()["c"]
             if existing_staples == 0:
@@ -270,6 +282,8 @@ class Database:
                         "servings": row["servings"],
                         "instructions": row["instructions"],
                         "source_url": row["source_url"],
+                        "image_url": row["image_url"] or "",
+                        "healthy_score": max(1, min(5, int(row["healthy_score"] or 3))),
                         "ingredients": [
                             {
                                 "id": i["id"],
@@ -294,15 +308,26 @@ class Database:
         instructions: str = "",
         source_url: str = "",
         recipe_id: int | None = None,
+        image_url: str | None = None,
+        healthy_score: int = 3,
     ) -> dict[str, Any]:
         valid_cats = [c for c in categories if c in MEAL_TYPES] or ["ebed"]
+        clamped_score = max(1, min(5, int(healthy_score or 3)))
         staples_set = {s["key"] for s in self.list_staples()}
         with self.connect() as conn:
             if recipe_id is not None:
+                if image_url is None:
+                    prev = conn.execute(
+                        "SELECT image_url FROM recipes WHERE id = ?", (recipe_id,)
+                    ).fetchone()
+                    final_image_url = prev["image_url"] if prev else ""
+                else:
+                    final_image_url = image_url.strip()
+
                 conn.execute(
                     """
                     UPDATE recipes
-                    SET title = ?, categories_json = ?, servings = ?, instructions = ?, source_url = ?
+                    SET title = ?, categories_json = ?, servings = ?, instructions = ?, source_url = ?, image_url = ?, healthy_score = ?
                     WHERE id = ?
                     """,
                     (
@@ -311,6 +336,8 @@ class Database:
                         max(1, int(servings)),
                         instructions.strip(),
                         source_url.strip(),
+                        final_image_url,
+                        clamped_score,
                         recipe_id,
                     ),
                 )
@@ -319,8 +346,8 @@ class Database:
             else:
                 cur = conn.execute(
                     """
-                    INSERT INTO recipes (title, categories_json, servings, instructions, source_url)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO recipes (title, categories_json, servings, instructions, source_url, image_url, healthy_score)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         title.strip(),
@@ -328,6 +355,8 @@ class Database:
                         max(1, int(servings)),
                         instructions.strip(),
                         source_url.strip(),
+                        (image_url or "").strip(),
+                        clamped_score,
                     ),
                 )
                 rid = int(cur.lastrowid)
@@ -353,6 +382,27 @@ class Database:
                 )
         matches = [r for r in self.list_recipes() if r["id"] == rid]
         return matches[0]
+
+    def set_recipe_image(self, recipe_id: int, image_url: str) -> dict[str, Any]:
+        with self.connect() as conn:
+            cur = conn.execute(
+                "UPDATE recipes SET image_url = ? WHERE id = ?",
+                (image_url.strip(), int(recipe_id)),
+            )
+            if cur.rowcount == 0:
+                raise ValueError(f"Nem található recept ezzel az ID-val: {recipe_id}")
+        return [r for r in self.list_recipes() if r["id"] == int(recipe_id)][0]
+
+    def set_recipe_healthy_score(self, recipe_id: int, healthy_score: int) -> dict[str, Any]:
+        clamped = max(1, min(5, int(healthy_score)))
+        with self.connect() as conn:
+            cur = conn.execute(
+                "UPDATE recipes SET healthy_score = ? WHERE id = ?",
+                (clamped, int(recipe_id)),
+            )
+            if cur.rowcount == 0:
+                raise ValueError(f"Nem található recept ezzel az ID-val: {recipe_id}")
+        return [r for r in self.list_recipes() if r["id"] == int(recipe_id)][0]
 
     def delete_recipe(self, recipe_id: int) -> bool:
         with self.connect() as conn:
@@ -698,6 +748,26 @@ class Database:
                     "custom_ingredients": [],
                 }
         return self.save_weekly_plan(days=days, week_start=wk)
+
+    def reset_weekly_plan(self, week_start: str | None = None) -> dict[str, Any]:
+        """0 AI-tokenes teljes heti menü nullázás üresre."""
+        wk = week_start or current_week_monday()
+        empty_days = {d[0]: {} for d in DAYS_HU}
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO weekly_plans (week_start, status, plan_json, adhoc_items_json, recommendation_note, updated_at)
+                VALUES (?, 'DRAFT', ?, '[]', '', datetime('now'))
+                ON CONFLICT(week_start) DO UPDATE SET
+                    status = 'DRAFT',
+                    plan_json = excluded.plan_json,
+                    adhoc_items_json = '[]',
+                    recommendation_note = '',
+                    updated_at = datetime('now')
+                """,
+                (wk, json.dumps(empty_days, ensure_ascii=False)),
+            )
+        return self.get_weekly_plan(wk) or {}
 
     def add_adhoc_item_to_week(
         self,

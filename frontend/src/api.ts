@@ -79,7 +79,59 @@ export interface Recipe {
   servings: number;
   instructions: string;
   source_url: string;
+  image_url: string;
+  healthy_score: number;
   ingredients: Ingredient[];
+}
+
+export const HEALTHY_META: Record<
+  number,
+  { label: string; emoji: string; badgeClass: string }
+> = {
+  1: {
+    label: "Bűnözős",
+    emoji: "🍔",
+    badgeClass: "bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30",
+  },
+  2: {
+    label: "Házias",
+    emoji: "🍝",
+    badgeClass: "bg-orange-500/15 text-orange-700 dark:text-orange-300 border-orange-500/30",
+  },
+  3: {
+    label: "Kiegyensúlyozott",
+    emoji: "🍲",
+    badgeClass: "bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30",
+  },
+  4: {
+    label: "Egészséges",
+    emoji: "🥗",
+    badgeClass: "bg-lime-500/15 text-lime-700 dark:text-lime-300 border-lime-500/30",
+  },
+  5: {
+    label: "Szuper-fitt",
+    emoji: "💚",
+    badgeClass: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30",
+  },
+};
+
+export async function uploadRecipeImage(recipeId: number, file: File): Promise<Recipe> {
+  const form = new FormData();
+  form.append("file", file);
+  const headers: Record<string, string> = {};
+  const savedPin = localStorage.getItem("app_pin");
+  if (savedPin) headers["X-App-Pin"] = savedPin;
+
+  const res = await fetch(`/api/recipes/${recipeId}/image`, {
+    method: "POST",
+    headers,
+    body: form,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || "Képfeltöltési hiba");
+  }
+  return res.json() as Promise<Recipe>;
 }
 
 export interface ChatMessage {

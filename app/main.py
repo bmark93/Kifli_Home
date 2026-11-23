@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -17,6 +17,7 @@ from app.config import Settings, load_settings
 from app.db import Database
 from app.kifli_mcp import KifliMCPManager
 from app.llm_agent import ChefShoppingAgent
+from app.media import save_recipe_image_bytes
 from app.otthon_mcp_server import OptionalPinASGIWrapper, create_otthon_mcp_server
 from app.scheduler_and_bot import BotAndSchedulerRuntime
 from starlette.routing import Route
@@ -43,6 +44,8 @@ class RecipeInput(BaseModel):
     servings: int = 2
     instructions: str = ""
     source_url: str = ""
+    image_url: str | None = None
+    healthy_score: int = 3
     ingredients: list[IngredientInput] = Field(default_factory=list)
 
 
@@ -186,6 +189,8 @@ def create_app(custom_settings: Settings | None = None, enable_background: bool 
             servings=payload.servings,
             instructions=payload.instructions,
             source_url=payload.source_url,
+            image_url=payload.image_url,
+            healthy_score=payload.healthy_score,
             ingredients=[i.model_dump() for i in payload.ingredients],
         )
 
@@ -198,8 +203,33 @@ def create_app(custom_settings: Settings | None = None, enable_background: bool 
             servings=payload.servings,
             instructions=payload.instructions,
             source_url=payload.source_url,
+            image_url=payload.image_url,
+            healthy_score=payload.healthy_score,
             ingredients=[i.model_dump() for i in payload.ingredients],
         )
+
+    @app.post("/api/recipes/{recipe_id}/image", dependencies=[Depends(verify_pin)])
+    async def upload_recipe_image(
+        recipe_id: int, file: UploadFile = File(...)
+    ) -> dict[str, Any]:
+        try:
+            content = await file.read()
+            saved_url = save_recipe_image_bytes(
+                settings.data_dir,
+                content,
+                mime_type=file.content_type or "",
+                filename=file.filename or "",
+            )
+            return db.set_recipe_image(recipe_id, saved_url)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/recipes/{recipe_id}/image", dependencies=[Depends(verify_pin)])
+    async def delete_recipe_image(recipe_id: int) -> dict[str, Any]:
+        try:
+            return db.set_recipe_image(recipe_id, "")
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.delete("/api/recipes/{recipe_id}", dependencies=[Depends(verify_pin)])
     async def remove_recipe(recipe_id: int) -> dict[str, Any]:
@@ -264,6 +294,13 @@ def create_app(custom_settings: Settings | None = None, enable_background: bool 
             }
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/weekly-plan/reset", dependencies=[Depends(verify_pin)])
+    async def reset_weekly_plan() -> dict[str, Any]:
+        return {
+            "plan": db.reset_weekly_plan(),
+            "aggregated_shopping": db.aggregate_shopping_list(),
+        }
 
     @app.post("/api/weekly-plan/generate", dependencies=[Depends(verify_pin)])
     async def trigger_weekly_plan_generation() -> dict[str, Any]:
@@ -466,6 +503,9 @@ def create_app(custom_settings: Settings | None = None, enable_background: bool 
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    uploads_dir = settings.data_dir / "uploads"
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
     @app.get("/")

@@ -29,10 +29,14 @@ import {
   ArrowLeftRight,
   Copy,
   Terminal,
+  Flame,
+  ImagePlus,
 } from "lucide-react";
 import {
   apiFetch,
   formatFt,
+  HEALTHY_META,
+  uploadRecipeImage,
   type ChatMessage,
   type GeneralItem,
   type Ingredient,
@@ -42,6 +46,7 @@ import {
   type WeeklyPlanResponse,
 } from "./api";
 import { MealSwapSheet } from "./MealSwapSheet";
+import { FoodTinderSheet } from "./FoodTinderSheet";
 
 type TabId = "menu" | "chat" | "cart" | "general" | "recipes" | "settings";
 
@@ -157,15 +162,23 @@ export default function App() {
   const [genQty, setGenQty] = useState("1");
   const [genUnit, setGenUnit] = useState("db");
 
-  // Recept szűrő + modalok (Új & Szerkesztés)
+  // Recept szűrő + modalok (Új & Szerkesztés) + Kaja Tinder
   const [recipeFilter, setRecipeFilter] = useState<string>("");
   const [showNewRecipeSheet, setShowNewRecipeSheet] = useState(false);
   const [editingRecipeId, setEditingRecipeId] = useState<number | null>(null);
+  const [tinderOpen, setTinderOpen] = useState<{
+    day: string;
+    mealType: "reggeli" | "ebed" | "vacsora";
+  } | null>(null);
   const [showImportSheet, setShowImportSheet] = useState(false);
   const [importText, setImportText] = useState("");
   const [recTitle, setRecTitle] = useState("");
   const [recCats, setRecCats] = useState<string[]>(["ebed"]);
   const [recServings, setRecServings] = useState(2);
+  const [recHealthyScore, setRecHealthyScore] = useState<number>(3);
+  const [recImageUrl, setRecImageUrl] = useState<string>("");
+  const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
+  const [pendingImagePreview, setPendingImagePreview] = useState<string>("");
   const [recInstructions, setRecInstructions] = useState("");
   const [recSourceUrl, setRecSourceUrl] = useState("");
   const [recIngs, setRecIngs] = useState<Ingredient[]>([
@@ -177,6 +190,10 @@ export default function App() {
     setRecTitle("");
     setRecCats(["ebed"]);
     setRecServings(2);
+    setRecHealthyScore(3);
+    setRecImageUrl("");
+    setPendingImageFile(null);
+    setPendingImagePreview("");
     setRecInstructions("");
     setRecSourceUrl("");
     setRecIngs([{ name: "", quantity: 1, unit: "db", brand_hint: "", is_staple: false }]);
@@ -188,6 +205,10 @@ export default function App() {
     setRecTitle(r.title);
     setRecCats(r.categories.length ? [...r.categories] : ["ebed"]);
     setRecServings(r.servings || 2);
+    setRecHealthyScore(r.healthy_score || 3);
+    setRecImageUrl(r.image_url || "");
+    setPendingImageFile(null);
+    setPendingImagePreview("");
     setRecInstructions(r.instructions || "");
     setRecSourceUrl(r.source_url || "");
     setRecIngs(
@@ -413,6 +434,22 @@ export default function App() {
     }
   }
 
+  async function handleResetWeeklyPlan() {
+    if (!window.confirm("Biztosan törlöd az egész heti menüt és üresre állítod?")) return;
+    setBusyAction("reset-menu");
+    try {
+      const updated = await apiFetch<WeeklyPlanResponse>("/api/weekly-plan/reset", {
+        method: "POST",
+      });
+      setWeekly(updated);
+      notify("🗑️ Heti menü visszaállítva üresre!");
+    } catch (e: any) {
+      notify(e.message, "err");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
   async function handleSaveRecipe(e: React.FormEvent) {
     e.preventDefault();
     const validIngs = recIngs.filter((i) => i.name.trim());
@@ -423,19 +460,29 @@ export default function App() {
     setBusyAction("save-recipe");
     const isEdit = editingRecipeId !== null;
     try {
-      await apiFetch(isEdit ? `/api/recipes/${editingRecipeId}` : "/api/recipes", {
-        method: isEdit ? "PUT" : "POST",
-        body: JSON.stringify({
-          title: recTitle.trim(),
-          categories: recCats.length ? recCats : ["ebed"],
-          servings: recServings,
-          instructions: recInstructions.trim(),
-          source_url: recSourceUrl.trim(),
-          ingredients: validIngs,
-        }),
-      });
+      const saved = await apiFetch<Recipe>(
+        isEdit ? `/api/recipes/${editingRecipeId}` : "/api/recipes",
+        {
+          method: isEdit ? "PUT" : "POST",
+          body: JSON.stringify({
+            title: recTitle.trim(),
+            categories: recCats.length ? recCats : ["ebed"],
+            servings: recServings,
+            healthy_score: recHealthyScore,
+            image_url: recImageUrl,
+            instructions: recInstructions.trim(),
+            source_url: recSourceUrl.trim(),
+            ingredients: validIngs,
+          }),
+        }
+      );
+      if (pendingImageFile) {
+        await uploadRecipeImage(saved.id, pendingImageFile);
+      }
       setShowNewRecipeSheet(false);
       setEditingRecipeId(null);
+      setPendingImageFile(null);
+      setPendingImagePreview("");
       await Promise.all([loadRecipesAndSettings(), loadCore()]);
       notify(isEdit ? "✅ Recept frissítve!" : "🍲 Új recept elmentve!");
     } catch (err: any) {
@@ -686,11 +733,20 @@ export default function App() {
                     )}
                   </div>
 
-                  <div className="grid grid-cols-2 sm:flex gap-2.5 shrink-0">
+                  <div className="grid grid-cols-2 sm:flex sm:flex-wrap gap-2 shrink-0">
+                    <button
+                      disabled={busyAction !== ""}
+                      onClick={() => setTinderOpen({ day: selectedDay, mealType: "ebed" })}
+                      className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-2xl bg-gradient-to-r from-rose-500 to-orange-500 hover:from-rose-400 hover:to-orange-400 active:scale-[0.98] text-xs sm:text-sm font-bold text-white shadow-lg shadow-rose-500/25 transition disabled:opacity-50"
+                    >
+                      <Flame className="w-4 h-4" />
+                      <span>Kaja Tinder</span>
+                    </button>
+
                     <button
                       disabled={busyAction !== ""}
                       onClick={handleGenerateMenu}
-                      className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-white/15 hover:bg-white/25 active:scale-[0.98] text-xs sm:text-sm font-semibold text-white border border-white/20 transition disabled:opacity-50"
+                      className="flex items-center justify-center gap-1.5 px-3.5 py-3 rounded-2xl bg-white/15 hover:bg-white/25 active:scale-[0.98] text-xs sm:text-sm font-semibold text-white border border-white/20 transition disabled:opacity-50"
                     >
                       <RefreshCw
                         className={`w-4 h-4 ${busyAction === "generate-menu" ? "animate-spin" : ""}`}
@@ -701,10 +757,20 @@ export default function App() {
                     <button
                       disabled={busyAction !== ""}
                       onClick={handleSendToKifliCart}
-                      className="flex items-center justify-center gap-2 px-4 py-3 rounded-2xl bg-white text-emerald-950 hover:bg-emerald-50 dark:bg-emerald-500 dark:hover:bg-emerald-400 dark:text-slate-950 active:scale-[0.98] text-xs sm:text-sm font-bold shadow-lg transition disabled:opacity-50"
+                      className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-2xl bg-white text-emerald-950 hover:bg-emerald-50 dark:bg-emerald-500 dark:hover:bg-emerald-400 dark:text-slate-950 active:scale-[0.98] text-xs sm:text-sm font-bold shadow-lg transition disabled:opacity-50"
                     >
                       <ShoppingBasket className="w-4 h-4" />
                       <span>{busyAction === "build-cart" ? "Kosár épül..." : "Kifli kosárba"}</span>
+                    </button>
+
+                    <button
+                      disabled={busyAction !== ""}
+                      onClick={handleResetWeeklyPlan}
+                      title="Heti menü törlése / visszaállítás üresre"
+                      className="flex items-center justify-center gap-1.5 px-3.5 py-3 rounded-2xl bg-rose-500/20 hover:bg-rose-500/35 active:scale-[0.98] text-xs sm:text-sm font-semibold text-rose-100 border border-rose-400/30 transition disabled:opacity-50"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      <span>Reset</span>
                     </button>
                   </div>
                 </div>
@@ -1441,77 +1507,100 @@ export default function App() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
-                {filteredRecipes.map((r) => (
-                  <div
-                    key={r.id}
-                    className="rounded-3xl bg-white dark:bg-[#11192a] border border-slate-200/80 dark:border-white/5 p-4 flex flex-col justify-between space-y-3 shadow-sm dark:shadow-none"
-                  >
-                    <div>
-                      <div className="flex items-start justify-between gap-2">
-                        <h3
-                          onClick={() => openEditRecipe(r)}
-                          className="font-bold text-slate-900 dark:text-white leading-snug cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-300 transition"
-                        >
-                          {r.title}
-                        </h3>
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
+                {filteredRecipes.map((r) => {
+                  const hm = HEALTHY_META[r.healthy_score || 3] || HEALTHY_META[3];
+                  return (
+                    <div
+                      key={r.id}
+                      className="rounded-3xl bg-white dark:bg-[#11192a] border border-slate-200/80 dark:border-white/5 overflow-hidden flex flex-col justify-between shadow-sm dark:shadow-none"
+                    >
+                      <div>
+                        {r.image_url && (
+                          <div
                             onClick={() => openEditRecipe(r)}
-                            className="text-slate-500 hover:text-emerald-600 dark:text-slate-400 dark:hover:text-emerald-300 hover:bg-slate-100 dark:hover:bg-white/5 rounded-lg p-1.5 transition"
-                            title="Recept szerkesztése"
+                            className="h-36 w-full overflow-hidden cursor-pointer relative"
                           >
-                            <Pencil className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={async () => {
-                              await apiFetch(`/api/recipes/${r.id}`, { method: "DELETE" });
-                              await Promise.all([loadRecipesAndSettings(), loadCore()]);
-                              notify("Recept törölve");
-                            }}
-                            className="text-slate-400 hover:text-rose-500 hover:bg-slate-100 dark:hover:bg-white/5 rounded-lg p-1.5 transition"
-                            title="Recept törlése"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                            <img
+                              src={r.image_url}
+                              alt={r.title}
+                              loading="lazy"
+                              className="w-full h-full object-cover hover:scale-105 transition duration-300"
+                            />
+                          </div>
+                        )}
+                        <div className="p-4">
+                          <div className="flex items-start justify-between gap-2">
+                            <h3
+                              onClick={() => openEditRecipe(r)}
+                              className="font-bold text-slate-900 dark:text-white leading-snug cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-300 transition"
+                            >
+                              {r.title}
+                            </h3>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                onClick={() => openEditRecipe(r)}
+                                className="text-slate-500 hover:text-emerald-600 dark:text-slate-400 dark:hover:text-emerald-300 hover:bg-slate-100 dark:hover:bg-white/5 rounded-lg p-1.5 transition"
+                                title="Recept szerkesztése"
+                              >
+                                <Pencil className="w-4 h-4" />
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  await apiFetch(`/api/recipes/${r.id}`, { method: "DELETE" });
+                                  await Promise.all([loadRecipesAndSettings(), loadCore()]);
+                                  notify("Recept törölve");
+                                }}
+                                className="text-slate-400 hover:text-rose-500 hover:bg-slate-100 dark:hover:bg-white/5 rounded-lg p-1.5 transition"
+                                title="Recept törlése"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap gap-1.5 mt-1.5">
+                            <span
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${hm.badgeClass}`}
+                            >
+                              {hm.emoji} {r.healthy_score || 3}/5 · {hm.label}
+                            </span>
+                            {r.categories.map((c) => (
+                              <span
+                                key={c}
+                                className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:bg-white/5 dark:text-emerald-300"
+                              >
+                                {c}
+                              </span>
+                            ))}
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-400">
+                              {r.servings} adag
+                            </span>
+                          </div>
+
+                          <div className="flex flex-wrap gap-1.5 mt-3">
+                            {r.ingredients.map((ing, i) => (
+                              <span
+                                key={i}
+                                className="text-xs px-2.5 py-1 rounded-xl bg-slate-50 dark:bg-[#090d16] border border-slate-200/80 dark:border-white/5 text-slate-700 dark:text-slate-300"
+                              >
+                                {ing.name}{" "}
+                                <span className="text-slate-400 dark:text-slate-500">
+                                  {ing.quantity} {ing.unit}
+                                </span>
+                              </span>
+                            ))}
+                          </div>
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap gap-1.5 mt-1.5">
-                        {r.categories.map((c) => (
-                          <span
-                            key={c}
-                            className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:bg-white/5 dark:text-emerald-300"
-                          >
-                            {c}
-                          </span>
-                        ))}
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-400">
-                          {r.servings} adag
-                        </span>
-                      </div>
-
-                      <div className="flex flex-wrap gap-1.5 mt-3">
-                        {r.ingredients.map((ing, i) => (
-                          <span
-                            key={i}
-                            className="text-xs px-2.5 py-1 rounded-xl bg-slate-50 dark:bg-[#090d16] border border-slate-200/80 dark:border-white/5 text-slate-700 dark:text-slate-300"
-                          >
-                            {ing.name}{" "}
-                            <span className="text-slate-400 dark:text-slate-500">
-                              {ing.quantity} {ing.unit}
-                            </span>
-                          </span>
-                        ))}
-                      </div>
+                      {r.instructions && (
+                        <p className="text-xs text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-white/5 px-4 py-2.5">
+                          {r.instructions}
+                        </p>
+                      )}
                     </div>
-
-                    {r.instructions && (
-                      <p className="text-xs text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-white/5 pt-2.5">
-                        {r.instructions}
-                      </p>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1816,6 +1905,19 @@ export default function App() {
         </div>
       </nav>
 
+      {/* MODAL: 🔥 KAJA TINDER (Swipe jobbra/balra 0 AI tokennel!) */}
+      {tinderOpen && (
+        <FoodTinderSheet
+          initialDay={tinderOpen.day}
+          initialMealType={tinderOpen.mealType}
+          recipes={recipes}
+          onClose={() => setTinderOpen(null)}
+          onAcceptRecipe={async (days, mealType, recipe) => {
+            await handleManualSlotSwap(days, mealType, { recipeId: recipe.id });
+          }}
+        />
+      )}
+
       {/* MODAL: 0 AI-TOKENES ÉTKEZÉS-CSERE SAJÁT RECEPTEKBŐL */}
       {swapTarget && (
         <MealSwapSheet
@@ -1873,6 +1975,90 @@ export default function App() {
               className="w-full bg-slate-100 dark:bg-[#090d16] text-slate-900 dark:text-white rounded-2xl px-4 py-3 text-sm border border-slate-200 dark:border-white/10"
               required
             />
+
+            {/* Képfeltöltés + előnézet */}
+            <div className="rounded-2xl bg-slate-50 dark:bg-[#090d16]/70 border border-slate-200 dark:border-white/10 p-3 flex items-center gap-3">
+              {pendingImagePreview || recImageUrl ? (
+                <img
+                  src={pendingImagePreview || recImageUrl}
+                  alt="Recept kép"
+                  className="w-16 h-16 rounded-xl object-cover shrink-0 border border-slate-200 dark:border-white/10"
+                />
+              ) : (
+                <div className="w-16 h-16 rounded-xl bg-slate-200/70 dark:bg-white/5 flex items-center justify-center text-slate-400 shrink-0">
+                  <ImagePlus className="w-6 h-6" />
+                </div>
+              )}
+              <div className="flex-1 min-w-0 space-y-1.5">
+                <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  📸 Recept fotója (Kaja Tinderhez és kártyákhoz)
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <label className="cursor-pointer px-3 py-1.5 rounded-xl bg-emerald-600/15 text-emerald-700 dark:text-emerald-300 text-xs font-bold border border-emerald-500/30 hover:bg-emerald-600/25 transition">
+                    Kép választása
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          setPendingImageFile(file);
+                          setPendingImagePreview(URL.createObjectURL(file));
+                        }
+                      }}
+                    />
+                  </label>
+                  {(pendingImagePreview || recImageUrl) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPendingImageFile(null);
+                        setPendingImagePreview("");
+                        setRecImageUrl("");
+                      }}
+                      className="text-xs text-rose-500 hover:underline"
+                    >
+                      Kép eltávolítása
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Healthy Score 1–5 választó */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-slate-700 dark:text-slate-300">
+                  💚 Healthy Score (heti menü egyensúlyhoz)
+                </span>
+                <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                  {HEALTHY_META[recHealthyScore]?.emoji} {recHealthyScore}/5 ·{" "}
+                  {HEALTHY_META[recHealthyScore]?.label}
+                </span>
+              </div>
+              <div className="grid grid-cols-5 gap-1.5">
+                {[1, 2, 3, 4, 5].map((score) => {
+                  const meta = HEALTHY_META[score];
+                  const active = recHealthyScore === score;
+                  return (
+                    <button
+                      type="button"
+                      key={score}
+                      onClick={() => setRecHealthyScore(score)}
+                      className={`py-2 rounded-xl text-xs font-bold border transition flex flex-col items-center gap-0.5 ${
+                        active
+                          ? "bg-emerald-600 text-white border-emerald-600 dark:bg-emerald-500 dark:text-slate-950 dark:border-emerald-500 shadow-sm"
+                          : "bg-slate-100 dark:bg-[#090d16] text-slate-600 dark:text-slate-400 border-slate-200 dark:border-white/10"
+                      }`}
+                    >
+                      <span className="text-sm leading-none">{meta.emoji}</span>
+                      <span>{score}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
 
             <div className="flex items-center justify-between gap-2">
               <div className="flex gap-1.5">

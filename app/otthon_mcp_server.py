@@ -11,6 +11,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app.config import Settings
 from app.db import DAYS_HU, Database
+from app.media import download_and_save_recipe_image, save_recipe_image_base64
 
 
 class OptionalPinASGIWrapper:
@@ -129,6 +130,8 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
         description=(
             "Új recept felvétele VAGY meglévő recept szerkesztése (ha megadod a recipe_id-t). "
             "categories: ['reggeli', 'ebed', 'vacsora'] részhalmaza. "
+            "healthy_score: 1 (bűnözős/nehéz) .. 5 (szuper-egészséges), alapból 3. "
+            "image_url: opcionális kép URL (vagy használd a set_recipe_image toolt base64/URL képfeltöltéshez). "
             "ingredients: [{'name': 'burgonya', 'quantity': 1.0, 'unit': 'kg', 'is_staple': false, 'brand_hint': ''}]"
         )
     )
@@ -140,6 +143,8 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
         instructions: str = "",
         source_url: str = "",
         recipe_id: int | None = None,
+        healthy_score: int = 3,
+        image_url: str | None = None,
     ) -> dict[str, Any]:
         return db.create_or_update_recipe(
             title=title,
@@ -149,7 +154,47 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
             instructions=instructions,
             source_url=source_url,
             recipe_id=recipe_id,
+            healthy_score=healthy_score,
+            image_url=image_url,
         )
+
+    @mcp.tool(
+        description=(
+            "Kép feltöltése vagy beállítása egy meglévő recepthez (recipe_id alapján). "
+            "Megadhatsz publikus image_url-t (letölti és lokálisan eltárolja a NAS-on!) VAGY közvetlen image_base64 képadatot."
+        )
+    )
+    async def set_recipe_image(
+        recipe_id: int,
+        image_url: str = "",
+        image_base64: str = "",
+        mime_type: str = "image/jpeg",
+    ) -> dict[str, Any]:
+        if image_base64.strip():
+            saved_path = save_recipe_image_base64(
+                settings.data_dir, image_base64, mime_type=mime_type
+            )
+            return db.set_recipe_image(recipe_id, saved_path)
+        if image_url.strip():
+            try:
+                saved_path = await download_and_save_recipe_image(
+                    settings.data_dir, image_url.strip()
+                )
+                return db.set_recipe_image(recipe_id, saved_path)
+            except Exception:
+                # Ha a külső szerver nem engedi letölteni, eltároljuk közvetlen URL-ként
+                return db.set_recipe_image(recipe_id, image_url.strip())
+        raise ValueError("Adj meg image_url vagy image_base64 értéket!")
+
+    @mcp.tool(
+        description="Recept egészségességi pontszámának (healthy_score) beállítása 1 (nehéz/bűnözős) és 5 (nagyon egészséges) között."
+    )
+    def set_recipe_healthy_score(recipe_id: int, healthy_score: int) -> dict[str, Any]:
+        return db.set_recipe_healthy_score(recipe_id, healthy_score)
+
+    @mcp.tool(description="Teljes aktuális heti menü visszaállítása üresre (reset).")
+    def reset_weekly_menu() -> dict[str, Any]:
+        return db.reset_weekly_plan()
 
     @mcp.tool(description="Recept végleges törlése ID alapján.")
     def delete_recipe(recipe_id: int) -> dict[str, Any]:
