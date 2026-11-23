@@ -45,7 +45,7 @@ Ezután nyisd meg belső hálón / VPN-en:
 
 ---
 
-## 🔌 Saját beépített MCP Szerver (Claude Desktop / Claude Code / M4 MacBook Air)
+## 🔌 Saját beépített MCP Szerver (Claude Desktop / Claude Code /)
 
 Az alkalmazás saját **Streamable HTTP MCP végpontot** is publikál ugyanazon a porton:
 👉 `http://<linux-szerver-ip>:8085/mcp`
