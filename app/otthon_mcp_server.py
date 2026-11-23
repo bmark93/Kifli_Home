@@ -15,9 +15,12 @@ from app.db import DAYS_HU, Database
 
 class OptionalPinASGIWrapper:
     """
-    Ha a .env-ben be van állítva APP_ACCESS_PIN, akkor az /mcp végpont is megköveteli
-    vagy az `Authorization: Bearer <PIN>`, vagy az `X-App-Pin: <PIN>`, vagy a `?pin=<PIN>` paramétert.
-    Ha nincs APP_ACCESS_PIN (pl. zárt Tailscale/LAN hálózaton), szabadon hívható a belső hálóról.
+    Ha a .env-ben be van állítva APP_ACCESS_PIN, akkor az /mcp (és /mcp/<PIN>) végpont megköveteli:
+    - path paraméterként: /mcp/<PIN>  (ajánlott Claude Remote MCP / mobil appokhoz!)
+    - VAGY Authorization: Bearer <PIN>
+    - VAGY X-App-Pin: <PIN>
+    - VAGY ?pin=<PIN>
+    Ha nincs APP_ACCESS_PIN (pl. zárt Tailscale/LAN hálózaton), szabadon hívható.
     """
 
     def __init__(self, app: ASGIApp, expected_pin: str) -> None:
@@ -25,21 +28,32 @@ class OptionalPinASGIWrapper:
         self.expected_pin = expected_pin
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] == "http" and self.expected_pin:
-            req = Request(scope)
-            auth_hdr = req.headers.get("authorization", "")
-            bearer = auth_hdr[7:].strip() if auth_hdr.lower().startswith("bearer ") else ""
-            supplied = (
-                bearer
-                or req.headers.get("x-app-pin", "").strip()
-                or req.query_params.get("pin", "").strip()
-            )
-            if not supplied or not hmac.compare_digest(supplied, self.expected_pin):
-                resp = JSONResponse(
-                    {"error": "Unauthorized: missing or invalid APP_ACCESS_PIN"}, status_code=401
+        if scope["type"] == "http":
+            path_params = scope.get("path_params") or {}
+            path_pin = str(path_params.get("pin", "")).strip("/")
+
+            if self.expected_pin:
+                req = Request(scope)
+                auth_hdr = req.headers.get("authorization", "")
+                bearer = auth_hdr[7:].strip() if auth_hdr.lower().startswith("bearer ") else ""
+                supplied = (
+                    path_pin
+                    or bearer
+                    or req.headers.get("x-app-pin", "").strip()
+                    or req.query_params.get("pin", "").strip()
                 )
-                await resp(scope, receive, send)
-                return
+                if not supplied or not hmac.compare_digest(supplied, self.expected_pin):
+                    resp = JSONResponse(
+                        {"error": "Unauthorized: missing or invalid APP_ACCESS_PIN"}, status_code=401
+                    )
+                    await resp(scope, receive, send)
+                    return
+
+            # Ha /mcp/<PIN> útvonalon jött, normalizáljuk /mcp-re a belső MCP handler számára
+            if path_pin:
+                scope = dict(scope)
+                scope["path"] = "/mcp"
+
         await self.app(scope, receive, send)
 
 
@@ -205,6 +219,7 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
 
     starlette_mcp = mcp.streamable_http_app(
         streamable_http_path="/mcp",
+        json_response=True,
         stateless_http=True,
         host="0.0.0.0",
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),

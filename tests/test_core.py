@@ -264,3 +264,24 @@ def test_otthon_mcp_server_tools(tmp_path: Path) -> None:
     asyncio.run(_run())
     saved_titles = [r["title"] for r in app.state.db.list_recipes()]
     assert "Finomfőzelék" in saved_titles
+
+    # Path-alapú /mcp/<PIN> teszt Claude Remote MCP klienshez (json_response=True)
+    pin_settings = _make_settings(tmp_path, pin="SecretToken999")
+    pin_app = create_app(custom_settings=pin_settings, enable_background=False)
+    with TestClient(pin_app) as client:
+        headers = {"Accept": "application/json, text/event-stream"}
+        r_unauth = client.post(
+            "/mcp",
+            headers=headers,
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+        )
+        assert r_unauth.status_code == 401
+
+        r_ok = client.post(
+            "/mcp/SecretToken999",
+            headers=headers,
+            json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+        )
+        assert r_ok.status_code == 200
+        payload = r_ok.json()
+        assert len(payload["result"]["tools"]) >= 13
