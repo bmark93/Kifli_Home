@@ -4,10 +4,12 @@ import asyncio
 import copy
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+import httpx
 from mcp import ClientSession
 from mcp.client.auth import OAuthClientProvider, TokenStorage
 from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
@@ -19,6 +21,16 @@ from mcp.shared.auth import (
 )
 
 log = logging.getLogger("kifli_otthon.mcp")
+
+
+def unwrap_exception(exc: BaseException) -> Exception:
+    """Kicsomagolja az anyio/Python 3.11+ BaseExceptionGroup belső valódi hibaüzenetét."""
+    cur: BaseException = exc
+    while isinstance(cur, BaseExceptionGroup) and cur.exceptions:
+        cur = cur.exceptions[0]
+    if isinstance(cur, Exception):
+        return cur
+    return RuntimeError(str(cur))
 
 # Biztonsági fék: az AI soha nem adhat le fizetős rendelést, nem mondhat le meglévő
 # rendelést és nem adhat be ügyfélszolgálati reklamációt — kizárólag a kosarat kezelheti!
@@ -123,6 +135,7 @@ class DiskOAuthStorage(TokenStorage):
         self.directory.mkdir(parents=True, exist_ok=True)
         self.tokens_file = self.directory / "tokens.json"
         self.client_file = self.directory / "client.json"
+        self.meta_file = self.directory / "meta.json"
 
     async def get_tokens(self) -> OAuthToken | None:
         if not self.tokens_file.exists():
@@ -138,6 +151,17 @@ class DiskOAuthStorage(TokenStorage):
         self.tokens_file.write_text(
             tokens.model_dump_json(indent=2), encoding="utf-8"
         )
+        expires_in = int(tokens.expires_in or 3600)
+        meta = {"expires_at": time.time() + expires_in, "saved_at": time.time()}
+        self.meta_file.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+    def get_expires_at(self) -> float:
+        if not self.meta_file.exists():
+            return 0.0
+        try:
+            return float(json.loads(self.meta_file.read_text(encoding="utf-8")).get("expires_at", 0.0))
+        except Exception:
+            return 0.0
 
     async def get_client_info(self) -> OAuthClientInformationFull | None:
         if not self.client_file.exists():
@@ -155,7 +179,7 @@ class DiskOAuthStorage(TokenStorage):
         )
 
     def clear(self) -> None:
-        for f in (self.tokens_file, self.client_file):
+        for f in (self.tokens_file, self.client_file, self.meta_file):
             if f.exists():
                 f.unlink()
 
@@ -179,6 +203,7 @@ class KifliMCPManager:
         self._local_cb_server: asyncio.AbstractServer | None = None
         self._cached_tools: list[dict[str, Any]] | None = None
         self._last_error: str = ""
+        self._refresh_lock = asyncio.Lock()
 
     async def _stop_local_callback_server(self) -> None:
         if self._local_cb_server is not None:
@@ -391,6 +416,56 @@ class KifliMCPManager:
             )
         return converted
 
+    def _resolve_token_endpoint(self, client_info: OAuthClientInformationFull | None) -> str:
+        issuer = getattr(client_info, "issuer", None) if client_info else None
+        if issuer:
+            return f"{str(issuer).rstrip('/')}/oauth2/token"
+        parsed = urlsplit(self.mcp_url)
+        host = parsed.hostname or "mcp.kifli.hu"
+        if host.startswith("mcp."):
+            host = "identity." + host[4:]
+        return f"https://{host}/oauth2/token"
+
+    async def _ensure_fresh_tokens(self, force: bool = False) -> None:
+        """
+        Proaktívan megújítja a Kifli OAuth access_tokent a mentett refresh_tokennel,
+        mivel az mcp SDK újraindítás/új session esetén nem tárolja az expires_at időbélyeget.
+        """
+        async with self._refresh_lock:
+            tokens = await self.storage.get_tokens()
+            if not tokens or not tokens.refresh_token:
+                return
+            expires_at = self.storage.get_expires_at()
+            if not force and expires_at > time.time() + 300:
+                return
+
+            client_info = await self.storage.get_client_info()
+            if not client_info or not client_info.client_id:
+                return
+
+            token_url = self._resolve_token_endpoint(client_info)
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.post(
+                        token_url,
+                        data={
+                            "grant_type": "refresh_token",
+                            "refresh_token": tokens.refresh_token,
+                            "client_id": client_info.client_id,
+                        },
+                    )
+                if resp.status_code == 200:
+                    payload = resp.json()
+                    if not payload.get("refresh_token"):
+                        payload["refresh_token"] = tokens.refresh_token
+                    new_tokens = OAuthToken.model_validate(payload)
+                    await self.storage.set_tokens(new_tokens)
+                    log.info("Kifli OAuth access_token automatikusan megújítva (%s s).", new_tokens.expires_in)
+                else:
+                    log.warning("Kifli OAuth refresh sikertelen (%s): %s", resp.status_code, resp.text[:200])
+            except Exception as exc:
+                log.warning("Kifli OAuth refresh hálózati hiba: %s", exc)
+
     async def _non_interactive_auth(self) -> OAuthClientProvider:
         tokens = await self.storage.get_tokens()
         if not tokens:
@@ -399,12 +474,30 @@ class KifliMCPManager:
             )
 
         async def _no_redirect(_url: str) -> None:
-            raise RuntimeError("A Kifli OAuth token lejárt, kérlek jelentkezz be újra a Web UI-on!")
+            raise RuntimeError(
+                "A Kifli.hu belépésed lejárt (és a frissítő token már nem érvényes). "
+                "Lépj be újra egyszer a ⚙️ Kamra fülön!"
+            )
 
         async def _no_callback() -> AuthorizationCodeResult:
             raise RuntimeError("Interaktív OAuth callback nem elérhető háttérhívás közben.")
 
         return self._build_oauth_provider(_no_redirect, _no_callback)
+
+    async def _run_with_auto_refresh(self, fn: Any) -> Any:
+        await self._ensure_fresh_tokens(force=False)
+        try:
+            return await fn()
+        except BaseException as first_exc:
+            unwrapped = unwrap_exception(first_exc)
+            # Ha 401 / lejárt token miatt bukott el, 1-szer próbáljunk kényszerített refresh-t
+            if "lejárt" in str(unwrapped).lower() or "401" in str(unwrapped):
+                await self._ensure_fresh_tokens(force=True)
+                try:
+                    return await fn()
+                except BaseException as second_exc:
+                    raise unwrap_exception(second_exc) from None
+            raise unwrapped from None
 
     async def list_tools(self, force_refresh: bool = False) -> list[dict[str, Any]]:
         tokens = await self.storage.get_tokens()
@@ -413,18 +506,21 @@ class KifliMCPManager:
         if self._cached_tools is not None and not force_refresh:
             return self._cached_tools
 
-        auth = await self._non_interactive_auth()
-        async with create_mcp_http_client(auth=auth) as http_client:
-            async with streamable_http_client(
-                self.mcp_url,
-                http_client=http_client,
-                terminate_on_close=False,
-            ) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    resp = await session.list_tools()
-                    self._cached_tools = self._convert_tools(resp.tools)
-                    return self._cached_tools
+        async def _do() -> list[dict[str, Any]]:
+            auth = await self._non_interactive_auth()
+            async with create_mcp_http_client(auth=auth) as http_client:
+                async with streamable_http_client(
+                    self.mcp_url,
+                    http_client=http_client,
+                    terminate_on_close=False,
+                ) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        resp = await session.list_tools()
+                        self._cached_tools = self._convert_tools(resp.tools)
+                        return self._cached_tools
+
+        return await self._run_with_auto_refresh(_do)
 
     async def call_tool(self, mcp_tool_name: str, arguments: dict[str, Any]) -> str:
         if any(b in mcp_tool_name.lower() for b in BLOCKED_TOOL_SUBSTRINGS):
@@ -432,41 +528,49 @@ class KifliMCPManager:
                 {"error": "Biztonsági szabály: automatikus fizetés/rendelés-leadás tiltva. Csak a kosárba helyezés engedélyezett!"},
                 ensure_ascii=False,
             )
-        auth = await self._non_interactive_auth()
-        async with create_mcp_http_client(auth=auth) as http_client:
-            async with streamable_http_client(
-                self.mcp_url,
-                http_client=http_client,
-                terminate_on_close=False,
-            ) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    result = await session.call_tool(mcp_tool_name, arguments or {})
-                chunks: list[str] = []
-                for item in result.content:
-                    text_val = getattr(item, "text", None)
-                    if text_val:
-                        chunks.append(text_val)
-                    else:
-                        chunks.append(str(item))
-                output = "\n".join(chunks).strip()
-                if len(output) > 28000:
-                    output = output[:28000] + "\n...[csonkolva a token-takarékosság érdekében]"
-                return output or json.dumps({"ok": True})
+
+        async def _do() -> str:
+            auth = await self._non_interactive_auth()
+            async with create_mcp_http_client(auth=auth) as http_client:
+                async with streamable_http_client(
+                    self.mcp_url,
+                    http_client=http_client,
+                    terminate_on_close=False,
+                ) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        result = await session.call_tool(mcp_tool_name, arguments or {})
+                    chunks: list[str] = []
+                    for item in result.content:
+                        text_val = getattr(item, "text", None)
+                        if text_val:
+                            chunks.append(text_val)
+                        else:
+                            chunks.append(str(item))
+                    output = "\n".join(chunks).strip()
+                    if len(output) > 28000:
+                        output = output[:28000] + "\n...[csonkolva a token-takarékosság érdekében]"
+                    return output or json.dumps({"ok": True})
+
+        return await self._run_with_auto_refresh(_do)
 
     async def call_tool_untruncated(self, mcp_tool_name: str, arguments: dict[str, Any]) -> str:
         """Közvetlen (0 LLM tokenes) backend API hívásokhoz csonkolás nélkül."""
         if any(b in mcp_tool_name.lower() for b in BLOCKED_TOOL_SUBSTRINGS):
             raise RuntimeError("Tiltott művelet.")
-        auth = await self._non_interactive_auth()
-        async with create_mcp_http_client(auth=auth) as http_client:
-            async with streamable_http_client(
-                self.mcp_url,
-                http_client=http_client,
-                terminate_on_close=False,
-            ) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    result = await session.call_tool(mcp_tool_name, arguments or {})
-                    chunks = [getattr(item, "text", None) or str(item) for item in result.content]
-                    return "\n".join(chunks).strip() or "{}"
+
+        async def _do() -> str:
+            auth = await self._non_interactive_auth()
+            async with create_mcp_http_client(auth=auth) as http_client:
+                async with streamable_http_client(
+                    self.mcp_url,
+                    http_client=http_client,
+                    terminate_on_close=False,
+                ) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        result = await session.call_tool(mcp_tool_name, arguments or {})
+                        chunks = [getattr(item, "text", None) or str(item) for item in result.content]
+                        return "\n".join(chunks).strip() or "{}"
+
+        return await self._run_with_auto_refresh(_do)
