@@ -37,7 +37,9 @@ FŐ SZABÁLYOK ÉS MŰKÖDÉS:
    - Amikor a felhasználó kéri a Kifli kosár összeállítását:
      1) Először hívd meg a `get_aggregated_shopping_list` eszközt! Ez visszaadja az összevont recept+adhoc hozzávalókat, az Általános `PENDING` listát (`general_item_id`-val és esetleges `brand_hint` márkával), a mentett kedvenc Kifli termékeket (`preferred_kifli_product`), és a kamra-alapanyagokat (`staples_assumed_at_home`).
      2) A `staples_assumed_at_home` (pl. só, bors, olaj, liszt, pirospaprika) elemeket NE tedd be automatikusan a Kifli kosárba, csak a válaszod végén kérdezz rá egy sorban, hogy van-e otthon belőlük!
-     3) Használd a `kifli__batch_search_products` (egyszerre max 4 keresőkifejezés hívásonként; nyugodtan adj ki több párhuzamos tool-hívást egy körben!) és a `kifli__add_items_to_cart` eszközöket! Ha van `preferred_kifli_product` vagy `brand_hint` (pl. pontos tisztítószer márka), elsősorban azt keresd. Csak valós, MCP által visszaadott `productId`-ra hagyatkozz!
+     3) Használd a `kifli__batch_search_products` (egyszerre max 4 keresőkifejezés hívásonként; adj ki TÖBB párhuzamos `batch_search_products` hívást EGYETLEN körben, hogy a teljes bevásárlólista minden tételét azonnal megkeresd!) és a `kifli__add_items_to_cart` (EGYETLEN összefogott `items` tömbbel!) eszközöket!
+        - Mindig nézd meg a lista tételének `search_hint` és `diet_tags` mezőjét! Ha `diet_tags` tartalmazza a `"laktózmentes"` vagy `"gluténmentes"` jelzőt, KÖTELEZŐEN a `search_hint` alapján (pl. `"laktózmentes tej"`, `"laktózmentes tejföl"`) keress, SOHA ne hagyd ki a tételt, és SOHA ne tegyél be sima (nem mentes) tejterméket/tésztát!
+        - Ha van `preferred_kifli_product` vagy `brand_hint`, elsősorban azt keresd. Csak valós, MCP által visszaadott `productId`-ra hagyatkozz!
      4) KRITIKUS KISZERELÉS / DARABSZÁM SZABÁLY: A `kifli__add_items_to_cart` `quantity` mezője CSOMAG / DARAB számot vár, NEM grammot! Például:
         - Ha a listán `480 g zabpehely` szerepel, és a Kifli termék `500 g`-os csomag, akkor `quantity: 1` (1 csomag!), SOHA NE `480`!
         - Ha `30 db tojás` kell, és `10 db`-os dobozt találsz, akkor `quantity: 3` (3 doboz), SOHA NE `30`!
@@ -490,13 +492,30 @@ class ChefShoppingAgent:
         pref_lines = ["AKTÍV FELHASZNÁLÓI PREFERENCIÁK (KÖTELEZŐ BETARTANI!):"]
         if ps.get("weekly_budget_ft", 0) > 0:
             pref_lines.append(
-                f"- HETI BÜDZSÉ KORLÁT: max. {ps['weekly_budget_ft']} Ft! Törekedj rá, hogy a kosár végösszege ez alatt maradjon, és jelezd, ha közelítjük a keretet."
+                f"- HETI BÜDZSÉ KORLÁT: max. {ps['weekly_budget_ft']} Ft! "
+                "Menütervezésnél kerüld a drága alapanyagok (pl. lazac, marha, drága sajtok) halmozását, "
+                "kosárépítésnél pedig válaszd a kedvezőbb árú/akciós kiszereléseket, hogy beférjünk a keretbe! "
+                "Ha a végösszeg mégis túllépi, röviden emeld ki a 2-3 legdrágább tételt."
             )
         if ps.get("allergens"):
-            pref_lines.append(
-                f"- SZIGORÚ ALLERGÉN / DIÉTA TILTÓLISTA: {', '.join(ps['allergens'])}! "
-                "Ne ajánlj olyan receptet és ne tegyél kosárba olyan terméket, ami ezeket tartalmazza (kétség esetén ellenőrizd a `kifli__get_products_composition_batch` eszközzel!)."
-            )
+            allerg_set = {a.lower() for a in ps["allergens"]}
+            diet_rules: list[str] = []
+            if "laktóz" in allerg_set:
+                diet_rules.append(
+                    "LAKTÓZMENTES DIÉTA: Minden tejtermékből (tej, tejföl, sajt, vaj, tejszín, joghurt, túró stb.) "
+                    "KÖTELEZŐEN **laktózmentes** (vagy növényi) terméket keress és tegyél a kosárba (pl. 'laktózmentes tej', 'laktózmentes tejföl')! "
+                    "SOHA NE hagyd ki a tejet/tejterméket emiatt a kosárból, és SOHA NE tegyél be sima laktózos tejfölt/tejet/sajtot!"
+                )
+            if "glutén" in allerg_set:
+                diet_rules.append(
+                    "GLUTÉNMENTES DIÉTA: Tészta, kenyér, liszt, nokedli esetén KÖTELEZŐEN **gluténmentes** változatot keress és tegyél a kosárba, ne hagyd ki őket!"
+                )
+            strict_ban = [a for a in ps["allergens"] if a.lower() not in ("laktóz", "glutén")]
+            if strict_ban:
+                diet_rules.append(
+                    f"TILTOTT ALLERGÉNEK: {', '.join(strict_ban)} — ezeket tartalmazó receptet és terméket TILOS választani (ellenőrizd `kifli__get_products_composition_batch`-csel ha bizonytalan)!"
+                )
+            pref_lines.append("- " + " ".join(diet_rules))
         if ps.get("prefer_private_label"):
             pref_lines.append(
                 "- KIFLI SAJÁTMÁRKA ELŐNYBEN: Ha a felhasználó nem adott meg konkrét kedvenc márkát, részesítsd előnyben a kiváló ár-érték arányú Kifli saját márkákat: **Miil** (tejtermék), **Moddia** (papíráru), **Yutto** (magvak/gabona), **Ubomi** (kávé/ital), **Dacello** (felvágott/hús), **Kitchin** (alapanyag/tészta/konzerv), **Pappudia** (készétel)!"

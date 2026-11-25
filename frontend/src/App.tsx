@@ -1076,11 +1076,21 @@ export default function App() {
                       {weekly.aggregated_shopping.recipe_and_adhoc_items.map((it, idx) => (
                         <div
                           key={idx}
-                          className="flex items-center justify-between rounded-xl bg-slate-50 dark:bg-[#151912] border border-slate-200/70 dark:border-white/5 px-3 py-2 text-xs sm:text-sm"
+                          className="flex items-center justify-between gap-2 rounded-xl bg-slate-50 dark:bg-[#151912] border border-slate-200/70 dark:border-white/5 px-3 py-2 text-xs sm:text-sm"
                         >
-                          <span className="text-slate-700 dark:text-slate-200 truncate pr-2">
-                            {it.name}
-                          </span>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span className="text-slate-700 dark:text-slate-200 truncate">
+                              {it.name}
+                            </span>
+                            {it.diet_tags?.map((dt) => (
+                              <span
+                                key={dt}
+                                className="shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-500/25"
+                              >
+                                {dt}
+                              </span>
+                            ))}
+                          </div>
                           <span className="font-bold text-emerald-600 dark:text-emerald-400 shrink-0">
                             {it.quantity} {it.unit}
                           </span>

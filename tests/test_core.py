@@ -213,15 +213,15 @@ def test_recipe_editing_and_zero_token_manual_slot_swap(tmp_path: Path) -> None:
     assert body["plan"]["days"]["hetfo"]["ebed"]["title"] == "Paprikás krumpli kolbásszal"
     assert body["plan"]["days"]["kedd"]["ebed"]["title"] == "Paprikás krumpli kolbásszal"
 
-    # Összesített bevásárlólista 2 napra duplázza a szerkesztett mennyiségeket (2 x 1.5 kg = 3.0 kg)
+    # 4 adagos recept Hétfő + Kedd egymást követő ebédre = 1 főzés (NEM duplázza 3.0 kg-ra!)
     agg_by_name = {
         i["name"]: i for i in body["aggregated_shopping"]["recipe_and_adhoc_items"]
     }
-    assert agg_by_name["burgonya"]["quantity"] == 3.0
-    assert agg_by_name["füstölt kolbász"]["quantity"] == 400.0
+    assert agg_by_name["burgonya"]["quantity"] == 1.5
+    assert agg_by_name["füstölt kolbász"]["quantity"] == 200.0
     assert agg_by_name["füstölt kolbász"]["brand_hint"] == "Gyulai"
 
-    # 3. Étkezés törlése/kihagyása Kedd ebédről
+    # 3. Étkezés törlése/kihagyása Kedd ebédről (Hétfő továbbra is 1 főzés marad)
     cleared = client.put(
         "/api/weekly-plan/slot",
         json={"days": ["kedd"], "meal_type": "ebed", "clear": True},
@@ -504,3 +504,37 @@ def test_private_label_auto_vs_favorite_split(tmp_path: Path) -> None:
     auto_swaps, fav_proposals = split_auto_vs_favorite_swaps(candidates, fav_ids, fav_labels)
     assert [a["old_product_id"] for a in auto_swaps] == [55555]
     assert {f["old_product_id"] for f in fav_proposals} == {16321, 97249}
+
+
+def test_lactose_and_gluten_diet_substitution_in_shopping_list(tmp_path: Path) -> None:
+    db = Database(tmp_path / "diet.db")
+    db.update_planner_settings({"allergens": ["laktóz", "glutén"]})
+
+    # Kedvenc sima (laktózos) tej ne kerüljön erőltetésre laktózmentes módban!
+    db.save_product_preference("tej 2,8%", "16321", "Magyar Tej ESL Tej 2,8%")
+
+    recipes = db.list_recipes()
+    zabkasa = next(r for r in recipes if "Zabkása" in r["title"])
+    paprikas = next(r for r in recipes if "Csirkepaprikás" in r["title"])
+
+    # Hétfő + Kedd reggeli (2 adag -> 2x), Hétfő + Kedd ebéd (4 adag -> 1x főzés!)
+    db.set_weekly_meal_slots_manual(["hetfo", "kedd"], "reggeli", recipe_id=zabkasa["id"])
+    db.set_weekly_meal_slots_manual(["hetfo", "kedd"], "ebed", recipe_id=paprikas["id"])
+
+    agg = db.aggregate_shopping_list()
+    by_name = {i["name"].lower(): i for i in agg["recipe_and_adhoc_items"]}
+
+    # Mind a tej, mind a tejföl bent marad, laktózmentes címkével + search_hint-tel!
+    assert "tej 2,8%" in by_name
+    assert by_name["tej 2,8%"]["diet_tags"] == ["laktózmentes"]
+    assert by_name["tej 2,8%"]["search_hint"] == "laktózmentes tej 2,8%"
+    assert by_name["tej 2,8%"]["preferred_kifli_product"] is None  # nem erőlteti a laktózos kedvencet
+    assert by_name["tej 2,8%"]["quantity"] == 0.8  # 2 nap * 0.4 l (mert 2 adagos reggeli)
+
+    assert "tejföl 20%" in by_name
+    assert by_name["tejföl 20%"]["diet_tags"] == ["laktózmentes"]
+    assert by_name["tejföl 20%"]["search_hint"] == "laktózmentes tejföl 20%"
+    assert by_name["tejföl 20%"]["quantity"] == 330.0  # 1 főzés 2 napra (mert 4 adagos ebéd!)
+
+    # Nokedli gluténmentes címkét kap
+    assert by_name["friss nokedli"]["diet_tags"] == ["gluténmentes"]

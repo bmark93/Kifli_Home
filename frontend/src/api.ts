@@ -37,6 +37,8 @@ export interface WeeklyPlanResponse {
       quantity: number;
       unit: string;
       brand_hint?: string;
+      diet_tags?: string[];
+      search_hint?: string;
       preferred_kifli_product?: { id: string; name: string } | null;
       used_in: string[];
     }>;

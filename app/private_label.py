@@ -5,7 +5,7 @@ import json
 import logging
 from typing import Any
 
-from app.db import Database, normalize_key
+from app.db import Database, detect_diet_requirements, normalize_key
 from app.kifli_mcp import KifliMCPManager
 from app.llm_agent import ChefShoppingAgent
 
@@ -165,11 +165,14 @@ async def optimize_cart_private_label_structured(
 
     client = agent._create_client()
     ps = db.get_planner_settings()
-    allergen_note = (
-        f"TILTOTT ALLERGÉNEK: {', '.join(ps['allergens'])} — ezeket tartalmazó terméket SOHA ne javasolj!"
-        if ps.get("allergens")
-        else ""
-    )
+    active_allergens = ps.get("allergens") or []
+    allergen_note = ""
+    if active_allergens:
+        allergen_note = (
+            f"AKTÍV DIÉTA/ALLERGÉNEK: {', '.join(active_allergens)}! "
+            "Ha 'laktóz' aktív, tejtermékhez KIZÁRÓLAG 'laktózmentes' Kifli saját márkás terméket keress és válassz (soha ne sima tejterméket!). "
+            "Ha 'glutén' aktív, tésztához/kenyérhez KIZÁRÓLAG 'gluténmentes' változatot!"
+        )
 
     # 2. LLM 1. villámhívás: minden vizsgált termékhez 1 rövid magyar Kifli sajátmárka keresőkifejezés
     items_brief = [
@@ -182,6 +185,7 @@ async def optimize_cart_private_label_structured(
             "line_total_ft": it["line_total"],
             "volume": it["volume"],
             "unit": it["unit"],
+            "required_diet_tags": detect_diet_requirements(it["name"], active_allergens),
         }
         for it in eligible_items
     ]
@@ -189,8 +193,10 @@ async def optimize_cart_private_label_structured(
     kw_prompt = (
         "Az alábbi Kifli.hu kosár-tételekhez adj meg 1-1 rövid magyar keresőkifejezést, amivel a Kifli.hu-n "
         "megtalálható a hozzájuk passzoló Kifli saját márkás (Miil, Moddia, Yutto, Ubomi, Dacello, Kitchin, Pappudia) "
-        "alternatíva! Ha egy tételhez (pl. friss zöldség/gyümölcs/speciális vegyszer) nincs Kifli saját márka, hagyd ki.\n"
-        'Válaszolj SZIGORÚAN JSON tömbbel: [{"old_product_id": 123, "keyword": "Miil tej"}]\n\n'
+        "alternatíva! Ha `required_diet_tags` tartalmaz 'laktózmentes' vagy 'gluténmentes' jelzőt, azt KÖTELEZŐEN írd bele a kulcsszóba (pl. 'Miil laktózmentes tejföl')! "
+        "Ha egy tételhez (pl. friss zöldség/gyümölcs/speciális vegyszer) nincs Kifli saját márka, hagyd ki.\n"
+        f"{allergen_note}\n"
+        'Válaszolj SZIGORÚAN JSON tömbbel: [{"old_product_id": 123, "keyword": "Miil laktózmentes tej"}]\n\n'
         f"Kosár tételek:\n{json.dumps(items_brief, ensure_ascii=False)}"
     )
     kw_resp = await agent._chat_completion(
@@ -333,6 +339,18 @@ async def optimize_cart_private_label_structured(
         old_it = items_by_id.get(old_pid)
         new_prod = valid_new_products.get(new_pid)
         if not old_it or not new_prod or old_pid == new_pid:
+            continue
+
+        # Szigorú diéta-védelem: ha laktózmentes/gluténmentes kell, nem engedjük át a nem-mentes jelöltet!
+        req_diet = detect_diet_requirements(old_it["name"], active_allergens)
+        new_name_low = (new_prod.get("productName") or "").lower()
+        if "laktózmentes" in req_diet and not any(
+            w in new_name_low for w in ("laktózmentes", "laktozmentes", "növényi", "zab", "mandula", "kókusz")
+        ):
+            continue
+        if "gluténmentes" in req_diet and not any(
+            w in new_name_low for w in ("gluténmentes", "glutenmentes")
+        ):
             continue
 
         new_unit_price = round(float(new_prod.get("price") or 0))

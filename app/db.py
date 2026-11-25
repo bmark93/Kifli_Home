@@ -34,6 +34,67 @@ DEFAULT_STAPLES = [
     "ecet",
 ]
 
+DAIRY_KEYWORDS = (
+    "tej",
+    "tejföl",
+    "tejszín",
+    "vaj",
+    "túró",
+    "sajt",
+    "trappista",
+    "gouda",
+    "joghurt",
+    "kefir",
+    "mascarpone",
+    "mozzarella",
+    "krémsajt",
+    "cheddar",
+    "feta",
+    "camembert",
+    "parmezán",
+    "tejszínhab",
+    "ricotta",
+)
+
+GLUTEN_KEYWORDS = (
+    "tészta",
+    "spagetti",
+    "penne",
+    "fusilli",
+    "nokedli",
+    "kenyér",
+    "zsemle",
+    "kifli",
+    "liszt",
+    "zsemlemorzsa",
+    "tortilla",
+    "pita",
+    "kuszkusz",
+    "bulgur",
+    "keksz",
+)
+
+
+def detect_diet_requirements(ingredient_name: str, active_allergens: list[str]) -> list[str]:
+    """
+    Ha laktóz/glutén szűrő aktív, a tejtermékeket és gluténos tésztákat/kenyereket
+    NEM kihagyja, hanem 'laktózmentes' / 'gluténmentes' helyettesítő címkével látja el!
+    """
+    low = normalize_key(ingredient_name)
+    allergs = {a.strip().lower() for a in active_allergens}
+    tags: list[str] = []
+
+    if "laktóz" in allergs:
+        is_plant_based = any(w in low for w in ("laktózmentes", "növényi", "zabital", "mandula", "kókusz", "rizsital", "szójaital"))
+        if not is_plant_based and any(k in low for k in DAIRY_KEYWORDS):
+            tags.append("laktózmentes")
+
+    if "glutén" in allergs:
+        if "gluténmentes" not in low and any(k in low for k in GLUTEN_KEYWORDS):
+            tags.append("gluténmentes")
+
+    return tags
+
 
 def normalize_key(text: str) -> str:
     """Kisbetűs, szóköz-normalizált kulcs hozzávaló összevonáshoz és kedvenc márkákhoz."""
@@ -819,13 +880,16 @@ class Database:
     def aggregate_shopping_list(self, week_start: str | None = None) -> dict[str, Any]:
         """
         Összevonja a heti menü összes hozzávalóját + az adhoc tételeket + az Általános PENDING listát,
-        különválasztja a kamra-alapanyagokat, és hozzárendeli a kedvenc Kifli termékeket.
+        különválasztja a kamra-alapanyagokat, figyelembe veszi a 2-napos nagy főzéseket (servings >= 4),
+        és automatikusan ráteszi a laktózmentes / gluténmentes helyettesítő jelzőt.
         """
         wk = week_start or current_week_monday()
         plan = self.get_weekly_plan(wk)
         recipes_by_id = {r["id"]: r for r in self.list_recipes()}
         staples_keys = {s["key"] for s in self.list_staples()}
         prefs_by_key = {p["ingredient_key"]: p for p in self.list_product_preferences()}
+        planner_prefs = self.get_planner_settings()
+        active_allergens = planner_prefs.get("allergens") or []
 
         merged: dict[tuple[str, str], dict[str, Any]] = {}
         staples_needed: set[str] = set()
@@ -843,20 +907,30 @@ class Database:
             if is_staple or nkey in staples_keys:
                 staples_needed.add(name.strip())
                 return
+            diet_tags = detect_diet_requirements(name, active_allergens)
             bucket_key = (nkey, ukey)
             if bucket_key not in merged:
                 pref = prefs_by_key.get(nkey)
+                # Ha laktózmentes/gluténmentes kell, és a régi kedvenc nem az, ne erőltessük a laktózos kedvencet!
+                pref_ok = pref is not None
+                if pref and diet_tags:
+                    pname_low = pref["kifli_product_name"].lower()
+                    if any(dt not in pname_low for dt in diet_tags):
+                        pref_ok = False
+                search_hint = f"{' '.join(diet_tags)} {name.strip()}".strip() if diet_tags else name.strip()
                 merged[bucket_key] = {
                     "name": name.strip(),
                     "quantity": float(qty),
                     "unit": unit.strip() or "db",
                     "brand_hint": brand_hint.strip(),
+                    "diet_tags": diet_tags,
+                    "search_hint": search_hint,
                     "preferred_kifli_product": (
                         {
                             "id": pref["kifli_product_id"],
                             "name": pref["kifli_product_name"],
                         }
-                        if pref
+                        if (pref and pref_ok)
                         else None
                     ),
                     "used_in": [origin] if origin else [],
@@ -869,17 +943,35 @@ class Database:
                     merged[bucket_key]["used_in"].append(origin)
 
         if plan:
-            for day_code, day_label in DAYS_HU:
+            # 2 napos főzés (batch cooking) felismerése: ha egy >= 4 adagos ebéd/vacsora recept
+            # két egymást követő napon ismétlődik, azt 1 főzésként számoljuk (nem duplázza a hozzávalókat!)
+            last_batch_cooked: dict[str, tuple[str, int]] = {}
+            for day_idx, (day_code, day_label) in enumerate(DAYS_HU):
                 day_slots = plan["days"].get(day_code, {})
                 for meal_code in MEAL_TYPES:
                     slot = day_slots.get(meal_code)
                     if not slot:
+                        last_batch_cooked.pop(meal_code, None)
                         continue
-                    origin_label = f"{day_label} {meal_code}: {slot.get('title', '')}"
                     rid = slot.get("recipe_id")
+                    title_key = str(rid) if rid else normalize_key(slot.get("title", ""))
+                    rec_obj = recipes_by_id.get(rid) if rid else None
+                    servings = int(rec_obj["servings"]) if rec_obj else 2
+
+                    if meal_code in ("ebed", "vacsora") and servings >= 4:
+                        prev = last_batch_cooked.get(meal_code)
+                        if prev and prev[0] == title_key and prev[1] == day_idx - 1:
+                            # Ez a tegnapi 4 adagos főzés 2. napja -> nem vesszük meg kétszer!
+                            last_batch_cooked.pop(meal_code, None)
+                            continue
+                        last_batch_cooked[meal_code] = (title_key, day_idx)
+                    else:
+                        last_batch_cooked.pop(meal_code, None)
+
+                    origin_label = f"{day_label} {meal_code}: {slot.get('title', '')}"
                     custom_ings = slot.get("custom_ingredients") or []
-                    if rid and rid in recipes_by_id and not custom_ings:
-                        for ing in recipes_by_id[rid]["ingredients"]:
+                    if rec_obj and not custom_ings:
+                        for ing in rec_obj["ingredients"]:
                             _accumulate(
                                 ing["name"],
                                 ing["quantity"],
