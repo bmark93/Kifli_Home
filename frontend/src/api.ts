@@ -121,6 +121,10 @@ export interface Recipe {
   source_url: string;
   image_url: string;
   healthy_score: number;
+  kcal_per_serving: number;
+  protein_g: number;
+  carbs_g: number;
+  fat_g: number;
   ingredients: Ingredient[];
 }
 

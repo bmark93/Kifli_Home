@@ -90,6 +90,10 @@ LOCAL_TOOLS_SPEC: list[dict[str, Any]] = [
                         "type": "integer",
                         "description": "Egészségességi pontszám 1 (nehéz/bűnözős) és 5 (szuper-egészséges) között",
                     },
+                    "kcal_per_serving": {"type": "integer", "description": "Becsült kalória / adag (kcal)"},
+                    "protein_g": {"type": "number", "description": "Fehérje / adag (g)"},
+                    "carbs_g": {"type": "number", "description": "Szénhidrát / adag (g)"},
+                    "fat_g": {"type": "number", "description": "Zsír / adag (g)"},
                     "instructions": {"type": "string", "description": "Rövid elkészítési leírás"},
                     "ingredients": {
                         "type": "array",
@@ -483,6 +487,10 @@ class ChefShoppingAgent:
                 servings=int(args.get("servings", 2)),
                 instructions=args.get("instructions", ""),
                 healthy_score=int(args.get("healthy_score", 3) or 3),
+                kcal_per_serving=args.get("kcal_per_serving"),
+                protein_g=args.get("protein_g"),
+                carbs_g=args.get("carbs_g"),
+                fat_g=args.get("fat_g"),
                 user_id=user_id,
             )
 
@@ -797,9 +805,11 @@ class ChefShoppingAgent:
 
         client = self._create_client(llm_cfg)
         extract_prompt = (
-            "Nyerj ki az alábbi szövegből/HTML-ből egyetlen receptet szigorúan JSON formátumban!\n"
+            "Nyerj ki az alábbi szövegből/HTML-ből egyetlen receptet szigorúan JSON formátumban, "
+            "és becsüld meg az 1 adagra jutó kalóriát és makrókat (kcal_per_serving, protein_g, carbs_g, fat_g) is!\n"
             "Sémanév-kulcsok:\n"
             '{"title": "...", "categories": ["reggeli"|"ebed"|"vacsora"], "servings": 2, "healthy_score": 3, '
+            '"kcal_per_serving": 520, "protein_g": 32.0, "carbs_g": 48.0, "fat_g": 20.0, '
             '"instructions": "rövid magyar összefoglaló", '
             '"ingredients": [{"name": "...", "quantity": 1.0, "unit": "g|dkg|kg|ml|dl|l|db|ek|tk|csipet", "is_staple": false}]}\n\n'
             f"Forrás:\n{raw_content}"
@@ -824,8 +834,63 @@ class ChefShoppingAgent:
             categories=parsed.get("categories", ["ebed"]),
             servings=int(parsed.get("servings", 2)),
             healthy_score=int(parsed.get("healthy_score", 3) or 3),
+            kcal_per_serving=int(parsed.get("kcal_per_serving", 0) or 0),
+            protein_g=float(parsed.get("protein_g", 0) or 0),
+            carbs_g=float(parsed.get("carbs_g", 0) or 0),
+            fat_g=float(parsed.get("fat_g", 0) or 0),
             instructions=parsed.get("instructions", ""),
             source_url=source_url,
             ingredients=parsed.get("ingredients", []),
+            user_id=user_id,
+        )
+
+    async def estimate_recipe_macros(
+        self, recipe_id: int, user_id: int = 1
+    ) -> dict[str, Any]:
+        """1 villám LLM hívással kiszámolja a recept 1 adagra jutó kalóriáját és makróit (P/CH/Zs)."""
+        user = self.db.get_user_by_id(user_id)
+        llm_cfg = self.resolve_llm_config_for_user(user_id=user_id)
+        if user and user.get("is_demo") and not llm_cfg["using_own_key"]:
+            raise RuntimeError(
+                "Demo módban az AI makró-becslés ki van kapcsolva (kézzel bármikor átírhatod, "
+                "saját fiókban saját Gemini/OpenAI API kulccsal 1 kattintásra kiszámolja!)."
+            )
+
+        recipes = [r for r in self.db.list_recipes(user_id=user_id) if r["id"] == int(recipe_id)]
+        if not recipes:
+            raise ValueError(f"Nem található recept ezzel az ID-val: {recipe_id}")
+        rec = recipes[0]
+
+        llm_cfg = self.check_and_consume_ai_quota(user_id=user_id)
+        client = self._create_client(llm_cfg)
+        prompt = (
+            "Számold ki reálisan a következő recept **1 adagra jutó** tápértékeit a hozzávalók és az adagszám alapján!\n"
+            f"Recept: {rec['title']}\n"
+            f"Összes adagszám: {rec['servings']} adag\n"
+            f"Hozzávalók (összes adagra): {json.dumps(rec['ingredients'], ensure_ascii=False)}\n\n"
+            'Válaszolj SZIGORÚAN egyetlen JSON objektummal: '
+            '{"kcal_per_serving": 550, "protein_g": 35.0, "carbs_g": 48.0, "fat_g": 22.0}'
+        )
+        resp = await self._chat_completion(
+            client=client,
+            messages=[
+                {"role": "system", "content": "Táplálkozástudományi kalkulátor vagy. Csak érvényes JSON-nel válaszolj."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.1,
+            llm_cfg=llm_cfg,
+        )
+        txt = (resp.choices[0].message.content or "{}").strip()
+        if txt.startswith("```"):
+            txt = txt.strip("`")
+            if txt.startswith("json"):
+                txt = txt[4:].strip()
+        parsed = json.loads(txt)
+        return self.db.set_recipe_macros(
+            recipe_id=recipe_id,
+            kcal_per_serving=int(parsed.get("kcal_per_serving", 0) or 0),
+            protein_g=float(parsed.get("protein_g", 0) or 0),
+            carbs_g=float(parsed.get("carbs_g", 0) or 0),
+            fat_g=float(parsed.get("fat_g", 0) or 0),
             user_id=user_id,
         )

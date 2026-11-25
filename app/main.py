@@ -84,6 +84,10 @@ class RecipeInput(BaseModel):
     source_url: str = ""
     image_url: str | None = None
     healthy_score: int = 3
+    kcal_per_serving: int | None = None
+    protein_g: float | None = None
+    carbs_g: float | None = None
+    fat_g: float | None = None
     ingredients: list[IngredientInput] = Field(default_factory=list)
 
 
@@ -614,6 +618,10 @@ def create_app(
             source_url=payload.source_url,
             image_url=payload.image_url,
             healthy_score=payload.healthy_score,
+            kcal_per_serving=payload.kcal_per_serving,
+            protein_g=payload.protein_g,
+            carbs_g=payload.carbs_g,
+            fat_g=payload.fat_g,
             ingredients=[i.model_dump() for i in payload.ingredients],
             user_id=int(user["id"]),
         )
@@ -632,11 +640,24 @@ def create_app(
                 source_url=payload.source_url,
                 image_url=payload.image_url,
                 healthy_score=payload.healthy_score,
+                kcal_per_serving=payload.kcal_per_serving,
+                protein_g=payload.protein_g,
+                carbs_g=payload.carbs_g,
+                fat_g=payload.fat_g,
                 ingredients=[i.model_dump() for i in payload.ingredients],
                 user_id=int(user["id"]),
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/recipes/{recipe_id}/estimate-macros")
+    async def estimate_recipe_macros_api(
+        recipe_id: int, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
+        try:
+            return await agent.estimate_recipe_macros(recipe_id=recipe_id, user_id=int(user["id"]))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/recipes/{recipe_id}/image")
     async def upload_recipe_image(

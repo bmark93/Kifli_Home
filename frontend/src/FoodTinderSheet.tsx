@@ -641,8 +641,16 @@ export function FoodTinderSheet({
                         <h4 className="text-xl font-black text-white leading-tight drop-shadow">
                           {current.title}
                         </h4>
-                        <div className="text-xs text-slate-200/90 mt-0.5">
-                          {current.servings} adag · {index + 1} / {deck.length}
+                        <div className="text-xs text-slate-200/90 mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                          <span>
+                            {current.servings} adag · {index + 1} / {deck.length}
+                          </span>
+                          {current.kcal_per_serving > 0 && (
+                            <span className="font-bold text-amber-200">
+                              🔥 {current.kcal_per_serving} kcal · P {Math.round(current.protein_g)}g · CH{" "}
+                              {Math.round(current.carbs_g)}g · Zs {Math.round(current.fat_g)}g
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>

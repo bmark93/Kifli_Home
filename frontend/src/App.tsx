@@ -203,6 +203,10 @@ export default function App() {
   const [recCats, setRecCats] = useState<string[]>(["ebed"]);
   const [recServings, setRecServings] = useState(2);
   const [recHealthyScore, setRecHealthyScore] = useState<number>(3);
+  const [recKcal, setRecKcal] = useState<number>(0);
+  const [recProtein, setRecProtein] = useState<number>(0);
+  const [recCarbs, setRecCarbs] = useState<number>(0);
+  const [recFat, setRecFat] = useState<number>(0);
   const [recImageUrl, setRecImageUrl] = useState<string>("");
   const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
   const [pendingImagePreview, setPendingImagePreview] = useState<string>("");
@@ -218,6 +222,10 @@ export default function App() {
     setRecCats(["ebed"]);
     setRecServings(2);
     setRecHealthyScore(3);
+    setRecKcal(0);
+    setRecProtein(0);
+    setRecCarbs(0);
+    setRecFat(0);
     setRecImageUrl("");
     setPendingImageFile(null);
     setPendingImagePreview("");
@@ -233,6 +241,10 @@ export default function App() {
     setRecCats(r.categories.length ? [...r.categories] : ["ebed"]);
     setRecServings(r.servings || 2);
     setRecHealthyScore(r.healthy_score || 3);
+    setRecKcal(r.kcal_per_serving || 0);
+    setRecProtein(r.protein_g || 0);
+    setRecCarbs(r.carbs_g || 0);
+    setRecFat(r.fat_g || 0);
     setRecImageUrl(r.image_url || "");
     setPendingImageFile(null);
     setPendingImagePreview("");
@@ -672,6 +684,10 @@ export default function App() {
             categories: recCats.length ? recCats : ["ebed"],
             servings: recServings,
             healthy_score: recHealthyScore,
+            kcal_per_serving: recKcal,
+            protein_g: recProtein,
+            carbs_g: recCarbs,
+            fat_g: recFat,
             image_url: recImageUrl,
             instructions: recInstructions.trim(),
             source_url: recSourceUrl.trim(),
@@ -741,6 +757,12 @@ export default function App() {
       setBusyAction("");
     }
   }
+
+  const recipesById = useMemo(() => {
+    const map: Record<number, Recipe> = {};
+    for (const r of recipes) map[r.id] = r;
+    return map;
+  }, [recipes]);
 
   const filteredRecipes = useMemo(() => {
     if (!recipeFilter) return recipes;
@@ -1140,6 +1162,20 @@ export default function App() {
                       (dayObj) => {
                         const isToday = dayObj.key === todayKey();
                         const slots = weekly?.plan?.days?.[dayObj.key] || {};
+                        const dayMacros = (["reggeli", "ebed", "vacsora"] as const).reduce(
+                          (acc, mc) => {
+                            const sl = slots[mc];
+                            const rec = sl?.recipe_id ? recipesById[sl.recipe_id] : undefined;
+                            if (rec && rec.kcal_per_serving > 0) {
+                              acc.kcal += rec.kcal_per_serving;
+                              acc.p += rec.protein_g || 0;
+                              acc.c += rec.carbs_g || 0;
+                              acc.f += rec.fat_g || 0;
+                            }
+                            return acc;
+                          },
+                          { kcal: 0, p: 0, c: 0, f: 0 }
+                        );
                         const meals: Array<{
                           code: "reggeli" | "ebed" | "vacsora";
                           label: string;
@@ -1175,7 +1211,7 @@ export default function App() {
                                 : "border-slate-200/80 dark:border-white/5"
                             }`}
                           >
-                            <div className="flex items-center justify-between">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
                               <div className="flex items-center gap-2">
                                 <h3 className="font-bold text-base text-slate-900 dark:text-white">
                                   {dayObj.label}
@@ -1186,9 +1222,16 @@ export default function App() {
                                   </span>
                                 )}
                               </div>
-                              <span className="text-[11px] text-slate-400 dark:text-slate-500">
-                                Kattints a cseréhez
-                              </span>
+                              {dayMacros.kcal > 0 ? (
+                                <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-500/20">
+                                  🔥 {dayMacros.kcal} kcal · P {Math.round(dayMacros.p)}g · CH{" "}
+                                  {Math.round(dayMacros.c)}g · Zs {Math.round(dayMacros.f)}g
+                                </span>
+                              ) : (
+                                <span className="text-[11px] text-slate-400 dark:text-slate-500">
+                                  Kattints a cseréhez
+                                </span>
+                              )}
                             </div>
 
                             <div
@@ -2038,6 +2081,12 @@ export default function App() {
                             <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-400">
                               {r.servings} adag
                             </span>
+                            {r.kcal_per_serving > 0 && (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-500/20">
+                                🔥 {r.kcal_per_serving} kcal · P {Math.round(r.protein_g)}g · CH{" "}
+                                {Math.round(r.carbs_g)}g · Zs {Math.round(r.fat_g)}g
+                              </span>
+                            )}
                           </div>
 
                           <div className="flex flex-wrap gap-1.5 mt-3">
@@ -2852,6 +2901,88 @@ export default function App() {
                     </button>
                   );
                 })}
+              </div>
+            </div>
+
+            {/* 🔥 Kalória & Makrók (1 adagra) + 1-kattintásos AI becslés */}
+            <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200 dark:border-white/10 p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  🔥 Kalória &amp; Makrók (1 adagra)
+                </span>
+                {editingRecipeId !== null && (
+                  <button
+                    type="button"
+                    disabled={busyAction === "estimate-macros"}
+                    onClick={async () => {
+                      setBusyAction("estimate-macros");
+                      try {
+                        const updated = await apiFetch<Recipe>(
+                          `/api/recipes/${editingRecipeId}/estimate-macros`,
+                          { method: "POST" }
+                        );
+                        setRecKcal(updated.kcal_per_serving || 0);
+                        setRecProtein(updated.protein_g || 0);
+                        setRecCarbs(updated.carbs_g || 0);
+                        setRecFat(updated.fat_g || 0);
+                        await loadRecipesAndSettings();
+                        notify(`🔥 Makrók kiszámolva: ${updated.kcal_per_serving} kcal / adag!`);
+                      } catch (err: any) {
+                        notify(err.message, "err");
+                      } finally {
+                        setBusyAction("");
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded-xl bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 text-[11px] font-bold transition disabled:opacity-50"
+                  >
+                    {busyAction === "estimate-macros" ? "⏳ Számolás..." : "✨ Becslés AI-val"}
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                <div>
+                  <label className="block text-[10px] text-slate-500 mb-0.5">Kcal</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={recKcal}
+                    onChange={(e) => setRecKcal(Math.max(0, parseInt(e.target.value || "0", 10)))}
+                    className="w-full bg-white dark:bg-[#1C2218] text-slate-900 dark:text-white text-center rounded-xl py-1.5 text-xs border border-slate-200 dark:border-white/10"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-500 mb-0.5">Fehérje (g)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min={0}
+                    value={recProtein}
+                    onChange={(e) => setRecProtein(Math.max(0, parseFloat(e.target.value || "0")))}
+                    className="w-full bg-white dark:bg-[#1C2218] text-slate-900 dark:text-white text-center rounded-xl py-1.5 text-xs border border-slate-200 dark:border-white/10"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-500 mb-0.5">Szénhidrát (g)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min={0}
+                    value={recCarbs}
+                    onChange={(e) => setRecCarbs(Math.max(0, parseFloat(e.target.value || "0")))}
+                    className="w-full bg-white dark:bg-[#1C2218] text-slate-900 dark:text-white text-center rounded-xl py-1.5 text-xs border border-slate-200 dark:border-white/10"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-500 mb-0.5">Zsír (g)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min={0}
+                    value={recFat}
+                    onChange={(e) => setRecFat(Math.max(0, parseFloat(e.target.value || "0")))}
+                    className="w-full bg-white dark:bg-[#1C2218] text-slate-900 dark:text-white text-center rounded-xl py-1.5 text-xs border border-slate-200 dark:border-white/10"
+                  />
+                </div>
               </div>
             </div>
 

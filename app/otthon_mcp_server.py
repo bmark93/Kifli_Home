@@ -156,8 +156,7 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
         description=(
             "Új recept felvétele VAGY meglévő recept szerkesztése (ha megadod a recipe_id-t). "
             "categories: ['reggeli', 'ebed', 'vacsora'] részhalmaza. "
-            "healthy_score: 1 (bűnözős/nehéz) .. 5 (szuper-egészséges), alapból 3. "
-            "image_url: opcionális kép URL (vagy használd a set_recipe_image toolt base64/URL képfeltöltéshez). "
+            "healthy_score: 1..5, opcionálisan megadható kcal_per_serving, protein_g, carbs_g, fat_g (1 adagra) és image_url. "
             "ingredients: [{'name': 'burgonya', 'quantity': 1.0, 'unit': 'kg', 'is_staple': false, 'brand_hint': ''}]"
         )
     )
@@ -171,6 +170,10 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
         recipe_id: int | None = None,
         healthy_score: int = 3,
         image_url: str | None = None,
+        kcal_per_serving: int | None = None,
+        protein_g: float | None = None,
+        carbs_g: float | None = None,
+        fat_g: float | None = None,
     ) -> dict[str, Any]:
         return db.create_or_update_recipe(
             title=title,
@@ -182,6 +185,29 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
             recipe_id=recipe_id,
             healthy_score=healthy_score,
             image_url=image_url,
+            kcal_per_serving=kcal_per_serving,
+            protein_g=protein_g,
+            carbs_g=carbs_g,
+            fat_g=fat_g,
+            user_id=_uid(),
+        )
+
+    @mcp.tool(
+        description="Recept 1 adagra jutó kalóriájának és makróinak (kcal_per_serving, protein_g, carbs_g, fat_g) beállítása."
+    )
+    def set_recipe_macros(
+        recipe_id: int,
+        kcal_per_serving: int,
+        protein_g: float,
+        carbs_g: float,
+        fat_g: float,
+    ) -> dict[str, Any]:
+        return db.set_recipe_macros(
+            recipe_id=recipe_id,
+            kcal_per_serving=kcal_per_serving,
+            protein_g=protein_g,
+            carbs_g=carbs_g,
+            fat_g=fat_g,
             user_id=_uid(),
         )
 

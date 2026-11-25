@@ -187,6 +187,10 @@ class Database:
                     source_url TEXT NOT NULL DEFAULT '',
                     image_url TEXT NOT NULL DEFAULT '',
                     healthy_score INTEGER NOT NULL DEFAULT 3,
+                    kcal_per_serving INTEGER NOT NULL DEFAULT 0,
+                    protein_g REAL NOT NULL DEFAULT 0,
+                    carbs_g REAL NOT NULL DEFAULT 0,
+                    fat_g REAL NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT (datetime('now'))
                 );
 
@@ -308,6 +312,14 @@ class Database:
             conn.execute("ALTER TABLE recipes ADD COLUMN image_url TEXT NOT NULL DEFAULT ''")
         if "healthy_score" not in recipe_cols:
             conn.execute("ALTER TABLE recipes ADD COLUMN healthy_score INTEGER NOT NULL DEFAULT 3")
+        if "kcal_per_serving" not in recipe_cols:
+            conn.execute("ALTER TABLE recipes ADD COLUMN kcal_per_serving INTEGER NOT NULL DEFAULT 0")
+        if "protein_g" not in recipe_cols:
+            conn.execute("ALTER TABLE recipes ADD COLUMN protein_g REAL NOT NULL DEFAULT 0")
+        if "carbs_g" not in recipe_cols:
+            conn.execute("ALTER TABLE recipes ADD COLUMN carbs_g REAL NOT NULL DEFAULT 0")
+        if "fat_g" not in recipe_cols:
+            conn.execute("ALTER TABLE recipes ADD COLUMN fat_g REAL NOT NULL DEFAULT 0")
         if "user_id" not in recipe_cols:
             conn.execute("ALTER TABLE recipes ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1")
 
@@ -429,6 +441,10 @@ class Database:
                 "categories": ["reggeli"],
                 "servings": 2,
                 "healthy_score": 5,
+                "kcal_per_serving": 390,
+                "protein_g": 12.0,
+                "carbs_g": 68.0,
+                "fat_g": 7.0,
                 "instructions": "A zabpelyhet tejjel felfőzzük, tetejére karikázott banán és friss áfonya kerül.",
                 "ingredients": [
                     {"name": "zabpehely", "quantity": 120, "unit": "g", "is_staple": False},
@@ -442,6 +458,10 @@ class Database:
                 "categories": ["reggeli", "vacsora"],
                 "servings": 2,
                 "healthy_score": 4,
+                "kcal_per_serving": 480,
+                "protein_g": 34.0,
+                "carbs_g": 26.0,
+                "fat_g": 26.0,
                 "instructions": "4-5 tojásból lágy rántotta, pirított kovászos kenyérrel.",
                 "ingredients": [
                     {"name": "tojás", "quantity": 5, "unit": "db", "is_staple": False},
@@ -456,6 +476,10 @@ class Database:
                 "categories": ["ebed"],
                 "servings": 4,
                 "healthy_score": 3,
+                "kcal_per_serving": 640,
+                "protein_g": 46.0,
+                "carbs_g": 58.0,
+                "fat_g": 23.0,
                 "instructions": "Klasszikus tejfölös csirkepaprikás házi vagy kész nokedlivel.",
                 "ingredients": [
                     {"name": "csirkemell vagy csirkecomb filé", "quantity": 800, "unit": "g", "is_staple": False},
@@ -471,6 +495,10 @@ class Database:
                 "categories": ["ebed", "vacsora"],
                 "servings": 4,
                 "healthy_score": 3,
+                "kcal_per_serving": 690,
+                "protein_g": 38.0,
+                "carbs_g": 74.0,
+                "fat_g": 25.0,
                 "instructions": "Darált marhahúsos paradicsomos ragu spagettivel és reszelt parmezánnal.",
                 "ingredients": [
                     {"name": "darált marhahús", "quantity": 500, "unit": "g", "is_staple": False},
@@ -485,6 +513,10 @@ class Database:
                 "categories": ["vacsora", "ebed"],
                 "servings": 2,
                 "healthy_score": 5,
+                "kcal_per_serving": 460,
+                "protein_g": 44.0,
+                "carbs_g": 14.0,
+                "fat_g": 24.0,
                 "instructions": "Ropogós római saláta pirított csirkemellcsíkokkal és parmezánnal.",
                 "ingredients": [
                     {"name": "római saláta", "quantity": 1, "unit": "db", "is_staple": False},
@@ -498,8 +530,8 @@ class Database:
         for r in starters:
             cur = conn.execute(
                 """
-                INSERT INTO recipes (user_id, title, categories_json, servings, instructions, healthy_score)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO recipes (user_id, title, categories_json, servings, instructions, healthy_score, kcal_per_serving, protein_g, carbs_g, fat_g)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id,
@@ -508,6 +540,10 @@ class Database:
                     r["servings"],
                     r["instructions"],
                     r["healthy_score"],
+                    r["kcal_per_serving"],
+                    r["protein_g"],
+                    r["carbs_g"],
+                    r["fat_g"],
                 ),
             )
             recipe_id = int(cur.lastrowid)
@@ -758,6 +794,10 @@ class Database:
                         "source_url": row["source_url"],
                         "image_url": row["image_url"] or "",
                         "healthy_score": max(1, min(5, int(row["healthy_score"] or 3))),
+                        "kcal_per_serving": max(0, int(row["kcal_per_serving"] or 0)),
+                        "protein_g": round(max(0.0, float(row["protein_g"] or 0)), 1),
+                        "carbs_g": round(max(0.0, float(row["carbs_g"] or 0)), 1),
+                        "fat_g": round(max(0.0, float(row["fat_g"] or 0)), 1),
                         "ingredients": [
                             {
                                 "id": i["id"],
@@ -784,6 +824,10 @@ class Database:
         recipe_id: int | None = None,
         image_url: str | None = None,
         healthy_score: int = 3,
+        kcal_per_serving: int | None = None,
+        protein_g: float | None = None,
+        carbs_g: float | None = None,
+        fat_g: float | None = None,
         user_id: int = 1,
     ) -> dict[str, Any]:
         valid_cats = [c for c in categories if c in MEAL_TYPES] or ["ebed"]
@@ -792,17 +836,38 @@ class Database:
         with self.connect() as conn:
             if recipe_id is not None:
                 prev = conn.execute(
-                    "SELECT image_url FROM recipes WHERE id = ? AND user_id = ?",
+                    "SELECT image_url, kcal_per_serving, protein_g, carbs_g, fat_g FROM recipes WHERE id = ? AND user_id = ?",
                     (recipe_id, int(user_id)),
                 ).fetchone()
                 if not prev:
                     raise ValueError(f"Nem található recept ezzel az ID-val: {recipe_id}")
                 final_image_url = prev["image_url"] if image_url is None else image_url.strip()
+                final_kcal = (
+                    int(prev["kcal_per_serving"] or 0)
+                    if kcal_per_serving is None
+                    else max(0, int(kcal_per_serving))
+                )
+                final_protein = (
+                    float(prev["protein_g"] or 0)
+                    if protein_g is None
+                    else round(max(0.0, float(protein_g)), 1)
+                )
+                final_carbs = (
+                    float(prev["carbs_g"] or 0)
+                    if carbs_g is None
+                    else round(max(0.0, float(carbs_g)), 1)
+                )
+                final_fat = (
+                    float(prev["fat_g"] or 0)
+                    if fat_g is None
+                    else round(max(0.0, float(fat_g)), 1)
+                )
 
                 conn.execute(
                     """
                     UPDATE recipes
-                    SET title = ?, categories_json = ?, servings = ?, instructions = ?, source_url = ?, image_url = ?, healthy_score = ?
+                    SET title = ?, categories_json = ?, servings = ?, instructions = ?, source_url = ?,
+                        image_url = ?, healthy_score = ?, kcal_per_serving = ?, protein_g = ?, carbs_g = ?, fat_g = ?
                     WHERE id = ? AND user_id = ?
                     """,
                     (
@@ -813,6 +878,10 @@ class Database:
                         source_url.strip(),
                         final_image_url,
                         clamped_score,
+                        final_kcal,
+                        final_protein,
+                        final_carbs,
+                        final_fat,
                         recipe_id,
                         int(user_id),
                     ),
@@ -822,8 +891,8 @@ class Database:
             else:
                 cur = conn.execute(
                     """
-                    INSERT INTO recipes (user_id, title, categories_json, servings, instructions, source_url, image_url, healthy_score)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO recipes (user_id, title, categories_json, servings, instructions, source_url, image_url, healthy_score, kcal_per_serving, protein_g, carbs_g, fat_g)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         int(user_id),
@@ -834,6 +903,10 @@ class Database:
                         source_url.strip(),
                         (image_url or "").strip(),
                         clamped_score,
+                        max(0, int(kcal_per_serving or 0)),
+                        round(max(0.0, float(protein_g or 0)), 1),
+                        round(max(0.0, float(carbs_g or 0)), 1),
+                        round(max(0.0, float(fat_g or 0)), 1),
                     ),
                 )
                 rid = int(cur.lastrowid)
@@ -878,6 +951,35 @@ class Database:
             cur = conn.execute(
                 "UPDATE recipes SET healthy_score = ? WHERE id = ? AND user_id = ?",
                 (clamped, int(recipe_id), int(user_id)),
+            )
+            if cur.rowcount == 0:
+                raise ValueError(f"Nem található recept ezzel az ID-val: {recipe_id}")
+        return [r for r in self.list_recipes(user_id=user_id) if r["id"] == int(recipe_id)][0]
+
+    def set_recipe_macros(
+        self,
+        recipe_id: int,
+        kcal_per_serving: int,
+        protein_g: float,
+        carbs_g: float,
+        fat_g: float,
+        user_id: int = 1,
+    ) -> dict[str, Any]:
+        with self.connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE recipes
+                SET kcal_per_serving = ?, protein_g = ?, carbs_g = ?, fat_g = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (
+                    max(0, int(kcal_per_serving)),
+                    round(max(0.0, float(protein_g)), 1),
+                    round(max(0.0, float(carbs_g)), 1),
+                    round(max(0.0, float(fat_g)), 1),
+                    int(recipe_id),
+                    int(user_id),
+                ),
             )
             if cur.rowcount == 0:
                 raise ValueError(f"Nem található recept ezzel az ID-val: {recipe_id}")
