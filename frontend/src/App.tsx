@@ -496,7 +496,12 @@ export default function App() {
     try {
       await apiFetch("/api/weekly-plan/generate", { method: "POST" });
       await loadCore();
-      notify("✨ Elkészült az új heti menüterv + 1 ajánlás!");
+      if (currentUser?.is_demo && !currentUser.llm.using_own_key) {
+        setActiveTab("chat");
+        notify("🎯 Demo módban az élő AI generálás ki van kapcsolva — nézd meg a részleteket a chatben!");
+      } else {
+        notify("✨ Elkészült az új heti menüterv!");
+      }
     } catch (e: any) {
       notify(e.message, "err");
     } finally {
@@ -505,6 +510,12 @@ export default function App() {
   }
 
   async function handleSendToKifliCart() {
+    if (currentUser?.is_demo && !currentUser.llm.using_own_key) {
+      await refreshCart();
+      setActiveTab("cart");
+      notify("🎯 Demo Kifli kosár megnyitva — próbáld ki a 🏷️ Sajátmárka-spórolás gombot!");
+      return;
+    }
     setBusyAction("build-cart");
     try {
       await apiFetch("/api/chat", {
