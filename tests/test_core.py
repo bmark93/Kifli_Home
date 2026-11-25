@@ -324,14 +324,14 @@ def test_otthon_mcp_server_tools(tmp_path: Path) -> None:
         assert "application/json" in r_init.headers.get("content-type", "")
         assert r_init.json()["result"]["serverInfo"]["name"] == "kifli-otthon"
 
-        # 5. POST tools/list -> 19 tool JSON-ban (új: set_recipe_macros)
+        # 5. POST tools/list -> 20 tool JSON-ban (új: set_recipe_visibility)
         r_tools = client.post(
             "/mcp/SecretToken999",
             headers={"Accept": "application/json"},
             json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
         )
         assert r_tools.status_code == 200
-        assert len(r_tools.json()["result"]["tools"]) == 19
+        assert len(r_tools.json()["result"]["tools"]) == 20
 
 
 def test_recipe_image_healthy_score_and_weekly_reset(tmp_path: Path) -> None:
@@ -439,6 +439,7 @@ def test_couple_tinder_match_planner_settings_and_smart_restock(tmp_path: Path) 
                 "ai_recommendations_enabled": False,
                 "ai_recommendation_count": 3,
                 "ai_recommendation_meals": ["reggeli", "vacsora"],
+                "recipe_sources": ["own", "community", "kifli"],
             },
         )
         assert upd.status_code == 200
@@ -452,6 +453,7 @@ def test_couple_tinder_match_planner_settings_and_smart_restock(tmp_path: Path) 
         assert ps["ai_recommendations_enabled"] is False
         assert ps["ai_recommendation_count"] == 3
         assert ps["ai_recommendation_meals"] == ["reggeli", "vacsora"]
+        assert ps["recipe_sources"] == ["own", "community", "kifli"]
 
         # 2. Páros Kaja Tinder Match szoba (p1 + p2 -> IT'S A MATCH!)
         recipes = client.get("/api/recipes?category=ebed").json()
@@ -724,3 +726,153 @@ def test_google_oauth_login_redirect_and_csrf_state(tmp_path: Path) -> None:
         )
         assert bad_cb.status_code == 302
         assert "auth_error=" in bad_cb.headers["location"]
+
+
+def test_public_private_community_recipes_and_kifli_recipe_import(tmp_path: Path) -> None:
+    from app.kifli_recipes import parse_hungarian_ingredient_line
+
+    # Magyar hozzávaló sor parser
+    p1 = parse_hungarian_ingredient_line("400 g csirkemell filé")
+    assert p1 == {"name": "csirkemell filé", "quantity": 400.0, "unit": "g"}
+    p2 = parse_hungarian_ingredient_line("2 evőkanál olívaolaj")
+    assert p2 == {"name": "olívaolaj", "quantity": 2.0, "unit": "ek"}
+
+    settings = _make_settings(tmp_path, auth_required=True)
+    app = create_app(custom_settings=settings, enable_background=False)
+
+    with TestClient(app) as client:
+        # User 1 létrehoz 1 privát és 1 nyilvános receptet
+        client.post(
+            "/api/auth/register",
+            json={"email": "u1@example.com", "password": "Password123", "display_name": "Márk"},
+        )
+        r_priv = client.post(
+            "/api/recipes",
+            json={
+                "title": "Titkos Nagymama Pörkölt",
+                "categories": ["ebed"],
+                "is_public": False,
+                "ingredients": [{"name": "marhahús", "quantity": 500, "unit": "g"}],
+            },
+        ).json()
+        r_pub = client.post(
+            "/api/recipes",
+            json={
+                "title": "Közösségi Lazacos Bowl",
+                "categories": ["ebed"],
+                "is_public": True,
+                "kcal_per_serving": 510,
+                "ingredients": [{"name": "lazacfilé", "quantity": 300, "unit": "g"}],
+            },
+        ).json()
+        assert r_priv["is_public"] is False
+        assert r_pub["is_public"] is True
+
+        # User 2 regisztrál: csak a nyilvánosat látja a Közösségi válogatásban, és 1 klikkel elmenti!
+        client.cookies.clear()
+        client.post(
+            "/api/auth/register",
+            json={"email": "u2@example.com", "password": "Password123", "display_name": "Peti"},
+        )
+        comm = client.get("/api/community/recipes").json()
+        comm_titles = [c["title"] for c in comm]
+        assert "Közösségi Lazacos Bowl" in comm_titles
+        assert "Titkos Nagymama Pörkölt" not in comm_titles
+
+        copied = client.post(f"/api/community/recipes/{r_pub['id']}/copy")
+        assert copied.status_code == 200
+        assert copied.json()["title"] == "Közösségi Lazacos Bowl"
+        assert copied.json()["is_public"] is False
+
+        # Kifli.hu recept böngészés + 1-kattintásos import (0 AI token!)
+        kifli_res = client.get("/api/kifli/recipes?query=wrap").json()
+        assert len(kifli_res["recipes"]) >= 1
+        first_kr = kifli_res["recipes"][0]
+        imported = client.post(f"/api/kifli/recipes/{first_kr['kifli_recipe_id']}/import")
+        assert imported.status_code == 200
+        assert imported.json()["title"] == first_kr["title"]
+
+
+def test_household_account_linking_and_couple_tinder_day_sync(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path, auth_required=True)
+    app = create_app(custom_settings=settings, enable_background=False)
+
+    with TestClient(app) as client:
+        # 1. Férj (Tulajdonos) regisztrál és felvesz egy receptet
+        client.post(
+            "/api/auth/register",
+            json={"email": "ferj@example.com", "password": "Password123", "display_name": "Márk"},
+        )
+        r_mark = client.post(
+            "/api/recipes",
+            json={
+                "title": "Családi Bolognai",
+                "categories": ["ebed"],
+                "ingredients": [{"name": "spagetti", "quantity": 500, "unit": "g"}],
+            },
+        ).json()
+        hh_mark = client.get("/api/household").json()
+        assert len(hh_mark["join_code"]) == 6
+        assert hh_mark["is_owner"] is True
+
+        # Közös Menüválasztó szoba indítása Hétfő-Keddre
+        sess = client.post(
+            "/api/tinder/sessions",
+            json={"meal_type": "ebed", "target_days": ["hetfo", "kedd"]},
+        ).json()
+        code = sess["code"]
+        client.post(
+            f"/api/tinder/sessions/{code}/swipe",
+            json={"user_slot": "p1", "recipe_id": r_mark["id"], "decision": "like"},
+        )
+
+        # 2. Feleség regisztrál saját fiókkal, majd összekapcsolódik a 6 jegyű kóddal
+        client.cookies.clear()
+        client.post(
+            "/api/auth/register",
+            json={"email": "feleseg@example.com", "password": "Password123", "display_name": "Anna"},
+        )
+        # Összekapcsolás előtt még nem látja Márk receptjét
+        assert all(r["title"] != "Családi Bolognai" for r in client.get("/api/recipes").json())
+
+        joined = client.post(
+            "/api/household/join",
+            json={"join_code": hh_mark["join_code"]},
+        )
+        assert joined.status_code == 200
+        assert len(joined.json()["members"]) == 2
+        assert joined.json()["is_owner"] is False
+
+        # Összekapcsolás után AZONNAL ugyanazt a receptkönyvet látja!
+        wife_recipes = client.get("/api/recipes").json()
+        assert any(r["title"] == "Családi Bolognai" for r in wife_recipes)
+
+        # 3. Feleség is like-olja a szobában -> Match! Mindketten elfogadják (idempotens + szerver-oldali napléptetés)
+        sw = client.post(
+            f"/api/tinder/sessions/{code}/swipe",
+            json={"user_slot": "p2", "recipe_id": r_mark["id"], "decision": "like"},
+        ).json()
+        assert sw["is_match"] is True
+
+        acc1 = client.post(
+            f"/api/tinder/sessions/{code}/accept",
+            json={"days": ["hetfo", "kedd"], "meal_type": "ebed", "recipe_id": r_mark["id"]},
+        ).json()
+        assert acc1["already_accepted"] is False
+        assert acc1["placed_days"] == ["hetfo", "kedd"]
+        # A szerver automatikusan léptette a következő 2 napra (szerda, csutortok)!
+        assert acc1["session"]["target_days"] == ["szerda", "csutortok"]
+
+        # Második elfogadás ugyanarra a receptre idempotens: nem írja felül a szerda-csütörtököt!
+        acc2 = client.post(
+            f"/api/tinder/sessions/{code}/accept",
+            json={"days": ["szerda", "csutortok"], "meal_type": "ebed", "recipe_id": r_mark["id"]},
+        ).json()
+        assert acc2["already_accepted"] is True
+        assert acc2["placed_days"] == ["hetfo", "kedd"]
+
+        # Kilépés a háztartásból -> visszaáll a saját üres fiókjára
+        left = client.post("/api/household/leave").json()
+        assert left["is_owner"] is True
+        assert len(left["members"]) == 1
+

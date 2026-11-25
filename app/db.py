@@ -129,6 +129,7 @@ class Database:
         "ai_recommendations_enabled": True,
         "ai_recommendation_count": 1,
         "ai_recommendation_meals": ["ebed"],
+        "recipe_sources": ["own"],
     }
 
     def __init__(self, db_path: Path) -> None:
@@ -170,6 +171,8 @@ class Database:
                     llm_base_url TEXT NOT NULL DEFAULT '',
                     llm_api_key_enc TEXT NOT NULL DEFAULT '',
                     mcp_token TEXT NOT NULL DEFAULT '',
+                    household_owner_id INTEGER,
+                    household_join_code TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL DEFAULT (datetime('now'))
                 );
 
@@ -194,6 +197,8 @@ class Database:
                     protein_g REAL NOT NULL DEFAULT 0,
                     carbs_g REAL NOT NULL DEFAULT 0,
                     fat_g REAL NOT NULL DEFAULT 0,
+                    is_public INTEGER NOT NULL DEFAULT 0,
+                    copied_count INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT (datetime('now'))
                 );
 
@@ -310,6 +315,12 @@ class Database:
                 self._seed_starter_recipes(conn, user_id=1)
 
     def _migrate_legacy_tables(self, conn: sqlite3.Connection) -> None:
+        user_cols = self._table_columns(conn, "users")
+        if "household_owner_id" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN household_owner_id INTEGER")
+        if "household_join_code" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN household_join_code TEXT NOT NULL DEFAULT ''")
+
         recipe_cols = self._table_columns(conn, "recipes")
         if "image_url" not in recipe_cols:
             conn.execute("ALTER TABLE recipes ADD COLUMN image_url TEXT NOT NULL DEFAULT ''")
@@ -323,6 +334,10 @@ class Database:
             conn.execute("ALTER TABLE recipes ADD COLUMN carbs_g REAL NOT NULL DEFAULT 0")
         if "fat_g" not in recipe_cols:
             conn.execute("ALTER TABLE recipes ADD COLUMN fat_g REAL NOT NULL DEFAULT 0")
+        if "is_public" not in recipe_cols:
+            conn.execute("ALTER TABLE recipes ADD COLUMN is_public INTEGER NOT NULL DEFAULT 0")
+        if "copied_count" not in recipe_cols:
+            conn.execute("ALTER TABLE recipes ADD COLUMN copied_count INTEGER NOT NULL DEFAULT 0")
         if "user_id" not in recipe_cols:
             conn.execute("ALTER TABLE recipes ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1")
 
@@ -335,6 +350,14 @@ class Database:
         if "owner_user_id" not in self._table_columns(conn, "tinder_sessions"):
             conn.execute(
                 "ALTER TABLE tinder_sessions ADD COLUMN owner_user_id INTEGER NOT NULL DEFAULT 1"
+            )
+        if "accepted_matches_json" not in self._table_columns(conn, "tinder_sessions"):
+            conn.execute(
+                "ALTER TABLE tinder_sessions ADD COLUMN accepted_matches_json TEXT NOT NULL DEFAULT '[]'"
+            )
+        if "is_completed" not in self._table_columns(conn, "tinder_sessions"):
+            conn.execute(
+                "ALTER TABLE tinder_sessions ADD COLUMN is_completed INTEGER NOT NULL DEFAULT 0"
             )
 
         # Kompozit PK-s táblák átépítése, ha még nincs user_id oszlopuk
@@ -692,6 +715,125 @@ class Database:
             conn.execute("UPDATE users SET mcp_token = ? WHERE id = ?", (new_token, user_id))
         return self.get_user_by_id(user_id) or {}
 
+    # -------------------------------------------------------------------------
+    # 🏠 Családi / Háztartási fiók összekapcsolás (közös Kifli + receptek + AI kulcs)
+    # -------------------------------------------------------------------------
+    @staticmethod
+    def effective_workspace_id(user: dict[str, Any] | None) -> int:
+        if not user:
+            return 1
+        owner_id = user.get("household_owner_id")
+        return int(owner_id) if owner_id else int(user["id"])
+
+    def _generate_household_code(self) -> str:
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        return "".join(secrets.choice(alphabet) for _ in range(6))
+
+    def get_household_info(self, user_id: int) -> dict[str, Any]:
+        user = self.get_user_by_id(user_id)
+        if not user:
+            raise ValueError("Felhasználó nem található.")
+        owner_id = self.effective_workspace_id(user)
+        owner = self.get_user_by_id(owner_id) or user
+
+        join_code = (owner.get("household_join_code") or "").strip()
+        if not join_code and not owner.get("is_demo"):
+            join_code = self._generate_household_code()
+            with self.connect() as conn:
+                conn.execute(
+                    "UPDATE users SET household_join_code = ? WHERE id = ?",
+                    (join_code, owner_id),
+                )
+
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, email, display_name, household_owner_id
+                FROM users
+                WHERE id = ? OR household_owner_id = ?
+                ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, id ASC
+                """,
+                (owner_id, owner_id, owner_id),
+            ).fetchall()
+
+        members = [
+            {
+                "id": int(r["id"]),
+                "email": r["email"],
+                "display_name": r["display_name"],
+                "is_owner": int(r["id"]) == owner_id,
+                "is_me": int(r["id"]) == int(user_id),
+            }
+            for r in rows
+        ]
+        return {
+            "workspace_user_id": owner_id,
+            "is_owner": int(user_id) == owner_id,
+            "owner_name": owner["display_name"],
+            "join_code": join_code,
+            "members": members,
+        }
+
+    def rotate_household_join_code(self, user_id: int) -> dict[str, Any]:
+        user = self.get_user_by_id(user_id)
+        if not user:
+            raise ValueError("Felhasználó nem található.")
+        owner_id = self.effective_workspace_id(user)
+        if int(user_id) != owner_id:
+            raise ValueError("Csak a háztartás tulajdonosa generálhat új meghívókódot.")
+        new_code = self._generate_household_code()
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE users SET household_join_code = ? WHERE id = ?",
+                (new_code, owner_id),
+            )
+        return self.get_household_info(user_id)
+
+    def join_household_by_code(self, user_id: int, join_code: str) -> dict[str, Any]:
+        clean = join_code.strip().upper()
+        if not clean:
+            raise ValueError("Add meg a 6 karakteres háztartási csatlakozási kódot!")
+        me = self.get_user_by_id(user_id)
+        if not me or me.get("is_demo"):
+            raise ValueError("Demo fiók nem csatlakozhat háztartáshoz.")
+        with self.connect() as conn:
+            target = conn.execute(
+                "SELECT id, is_demo, household_owner_id FROM users WHERE upper(household_join_code) = ?",
+                (clean,),
+            ).fetchone()
+            if not target or target["is_demo"]:
+                raise ValueError("Nem található háztartás ezzel a kóddal.")
+            target_owner_id = int(target["household_owner_id"] or target["id"])
+            if target_owner_id == int(user_id):
+                raise ValueError("Ez a saját háztartásod kódja!")
+            # Ha már csatlakoztak hozzánk, ők is maradjanak tisztán leválasztva vagy költözzenek át
+            conn.execute(
+                "UPDATE users SET household_owner_id = ? WHERE id = ?",
+                (target_owner_id, int(user_id)),
+            )
+        return self.get_household_info(user_id)
+
+    def leave_or_remove_from_household(
+        self, actor_user_id: int, target_member_id: int | None = None
+    ) -> dict[str, Any]:
+        actor = self.get_user_by_id(actor_user_id)
+        if not actor:
+            raise ValueError("Felhasználó nem található.")
+        owner_id = self.effective_workspace_id(actor)
+        target_id = int(target_member_id) if target_member_id is not None else int(actor_user_id)
+
+        if target_id == owner_id:
+            raise ValueError("A háztartás tulajdonosa nem távolítható el.")
+        if target_id != int(actor_user_id) and int(actor_user_id) != owner_id:
+            raise ValueError("Csak a háztartás tulajdonosa távolíthat el más tagot.")
+
+        with self.connect() as conn:
+            conn.execute(
+                "UPDATE users SET household_owner_id = NULL WHERE id = ?",
+                (target_id,),
+            )
+        return self.get_household_info(actor_user_id)
+
     def ensure_demo_user(self, password_hash: str, mcp_token: str) -> dict[str, Any]:
         existing = self.get_user_by_email("demo@kifli.otthon")
         if existing:
@@ -738,6 +880,9 @@ class Database:
             self.set_weekly_meal_slots_manual(["pentek", "szombat"], "ebed", recipe_id=cez["id"], user_id=uid)
             self.set_weekly_meal_slots_manual(["hetfo", "szerda", "pentek"], "vacsora", recipe_id=cez["id"], user_id=uid)
             self.set_weekly_meal_slots_manual(["kedd", "csutortok", "vasarnap"], "vacsora", recipe_id=rant["id"], user_id=uid)
+            # 2 nyilvános közösségi minta-recept, hogy a Recept válogatás azonnal éljen
+            self.set_recipe_visibility(pap["id"], True, user_id=uid)
+            self.set_recipe_visibility(cez["id"], True, user_id=uid)
 
         self.update_planner_settings({"weekly_budget_ft": 45000}, user_id=uid)
         return demo
@@ -801,6 +946,8 @@ class Database:
                         "protein_g": round(max(0.0, float(row["protein_g"] or 0)), 1),
                         "carbs_g": round(max(0.0, float(row["carbs_g"] or 0)), 1),
                         "fat_g": round(max(0.0, float(row["fat_g"] or 0)), 1),
+                        "is_public": bool(row["is_public"]),
+                        "copied_count": int(row["copied_count"] or 0),
                         "ingredients": [
                             {
                                 "id": i["id"],
@@ -831,6 +978,7 @@ class Database:
         protein_g: float | None = None,
         carbs_g: float | None = None,
         fat_g: float | None = None,
+        is_public: bool | None = None,
         user_id: int = 1,
     ) -> dict[str, Any]:
         valid_cats = [c for c in categories if c in MEAL_TYPES] or ["ebed"]
@@ -839,7 +987,7 @@ class Database:
         with self.connect() as conn:
             if recipe_id is not None:
                 prev = conn.execute(
-                    "SELECT image_url, kcal_per_serving, protein_g, carbs_g, fat_g FROM recipes WHERE id = ? AND user_id = ?",
+                    "SELECT image_url, kcal_per_serving, protein_g, carbs_g, fat_g, is_public FROM recipes WHERE id = ? AND user_id = ?",
                     (recipe_id, int(user_id)),
                 ).fetchone()
                 if not prev:
@@ -865,12 +1013,17 @@ class Database:
                     if fat_g is None
                     else round(max(0.0, float(fat_g)), 1)
                 )
+                final_public = (
+                    int(prev["is_public"] or 0)
+                    if is_public is None
+                    else (1 if is_public else 0)
+                )
 
                 conn.execute(
                     """
                     UPDATE recipes
                     SET title = ?, categories_json = ?, servings = ?, instructions = ?, source_url = ?,
-                        image_url = ?, healthy_score = ?, kcal_per_serving = ?, protein_g = ?, carbs_g = ?, fat_g = ?
+                        image_url = ?, healthy_score = ?, kcal_per_serving = ?, protein_g = ?, carbs_g = ?, fat_g = ?, is_public = ?
                     WHERE id = ? AND user_id = ?
                     """,
                     (
@@ -885,6 +1038,7 @@ class Database:
                         final_protein,
                         final_carbs,
                         final_fat,
+                        final_public,
                         recipe_id,
                         int(user_id),
                     ),
@@ -894,8 +1048,8 @@ class Database:
             else:
                 cur = conn.execute(
                     """
-                    INSERT INTO recipes (user_id, title, categories_json, servings, instructions, source_url, image_url, healthy_score, kcal_per_serving, protein_g, carbs_g, fat_g)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO recipes (user_id, title, categories_json, servings, instructions, source_url, image_url, healthy_score, kcal_per_serving, protein_g, carbs_g, fat_g, is_public)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         int(user_id),
@@ -910,6 +1064,7 @@ class Database:
                         round(max(0.0, float(protein_g or 0)), 1),
                         round(max(0.0, float(carbs_g or 0)), 1),
                         round(max(0.0, float(fat_g or 0)), 1),
+                        1 if is_public else 0,
                     ),
                 )
                 rid = int(cur.lastrowid)
@@ -987,6 +1142,123 @@ class Database:
             if cur.rowcount == 0:
                 raise ValueError(f"Nem található recept ezzel az ID-val: {recipe_id}")
         return [r for r in self.list_recipes(user_id=user_id) if r["id"] == int(recipe_id)][0]
+
+    def set_recipe_visibility(
+        self, recipe_id: int, is_public: bool, user_id: int = 1
+    ) -> dict[str, Any]:
+        with self.connect() as conn:
+            cur = conn.execute(
+                "UPDATE recipes SET is_public = ? WHERE id = ? AND user_id = ?",
+                (1 if is_public else 0, int(recipe_id), int(user_id)),
+            )
+            if cur.rowcount == 0:
+                raise ValueError(f"Nem található recept ezzel az ID-val: {recipe_id}")
+        return [r for r in self.list_recipes(user_id=user_id) if r["id"] == int(recipe_id)][0]
+
+    def list_community_recipes(
+        self,
+        category: str | None = None,
+        search: str = "",
+        current_user_id: int = 1,
+    ) -> list[dict[str, Any]]:
+        q = normalize_key(search)
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT r.*, COALESCE(u.display_name, 'Közösségi tag') AS author_name
+                FROM recipes r
+                LEFT JOIN users u ON u.id = r.user_id
+                WHERE r.is_public = 1
+                ORDER BY r.copied_count DESC, r.id DESC
+                LIMIT 100
+                """
+            ).fetchall()
+            result: list[dict[str, Any]] = []
+            for row in rows:
+                cats = json.loads(row["categories_json"])
+                if category and category not in cats:
+                    continue
+                ings = conn.execute(
+                    "SELECT id, name, quantity, unit, is_staple, brand_hint FROM recipe_ingredients WHERE recipe_id = ? ORDER BY id",
+                    (row["id"],),
+                ).fetchall()
+                ing_list = [
+                    {
+                        "id": i["id"],
+                        "name": i["name"],
+                        "quantity": i["quantity"],
+                        "unit": i["unit"],
+                        "is_staple": bool(i["is_staple"]),
+                        "brand_hint": i["brand_hint"],
+                    }
+                    for i in ings
+                ]
+                if q:
+                    haystack = normalize_key(
+                        row["title"] + " " + " ".join(i["name"] for i in ing_list) + " " + (row["author_name"] or "")
+                    )
+                    if q not in haystack:
+                        continue
+                result.append(
+                    {
+                        "id": row["id"],
+                        "title": row["title"],
+                        "categories": cats,
+                        "servings": row["servings"],
+                        "instructions": row["instructions"],
+                        "source_url": row["source_url"],
+                        "image_url": row["image_url"] or "",
+                        "healthy_score": max(1, min(5, int(row["healthy_score"] or 3))),
+                        "kcal_per_serving": max(0, int(row["kcal_per_serving"] or 0)),
+                        "protein_g": round(max(0.0, float(row["protein_g"] or 0)), 1),
+                        "carbs_g": round(max(0.0, float(row["carbs_g"] or 0)), 1),
+                        "fat_g": round(max(0.0, float(row["fat_g"] or 0)), 1),
+                        "is_public": True,
+                        "copied_count": int(row["copied_count"] or 0),
+                        "author_name": row["author_name"] or "Közösségi tag",
+                        "is_mine": int(row["user_id"]) == int(current_user_id),
+                        "ingredients": ing_list,
+                    }
+                )
+            return result
+
+    def copy_public_recipe_to_user(
+        self, source_recipe_id: int, target_user_id: int
+    ) -> dict[str, Any]:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM recipes WHERE id = ? AND is_public = 1",
+                (int(source_recipe_id),),
+            ).fetchone()
+            if not row:
+                raise ValueError("Ez a recept nem található vagy már nem nyilvános.")
+            ings = conn.execute(
+                "SELECT name, quantity, unit, is_staple, brand_hint FROM recipe_ingredients WHERE recipe_id = ? ORDER BY id",
+                (row["id"],),
+            ).fetchall()
+            conn.execute(
+                "UPDATE recipes SET copied_count = copied_count + 1 WHERE id = ?",
+                (row["id"],),
+            )
+            source_data = dict(row)
+            ing_dicts = [dict(i) for i in ings]
+
+        return self.create_or_update_recipe(
+            title=source_data["title"],
+            categories=json.loads(source_data["categories_json"]),
+            servings=int(source_data["servings"] or 2),
+            instructions=source_data["instructions"] or "",
+            source_url=source_data["source_url"] or "",
+            image_url=source_data["image_url"] or "",
+            healthy_score=int(source_data["healthy_score"] or 3),
+            kcal_per_serving=int(source_data["kcal_per_serving"] or 0),
+            protein_g=float(source_data["protein_g"] or 0),
+            carbs_g=float(source_data["carbs_g"] or 0),
+            fat_g=float(source_data["fat_g"] or 0),
+            is_public=False,
+            ingredients=ing_dicts,
+            user_id=int(target_user_id),
+        )
 
     def delete_recipe(self, recipe_id: int, user_id: int = 1) -> bool:
         with self.connect() as conn:
@@ -1650,6 +1922,14 @@ class Database:
                         if strip_accents(str(m).strip().lower()) in MEAL_TYPES
                     ]
                     v = cleaned or ["ebed"]
+                elif k == "recipe_sources":
+                    valid_sources = ("own", "community", "kifli")
+                    cleaned = [
+                        str(s).strip().lower()
+                        for s in v
+                        if str(s).strip().lower() in valid_sources
+                    ]
+                    v = list(dict.fromkeys(cleaned)) or ["own"]
                 current[k] = v
                 conn.execute(
                     """
@@ -1726,12 +2006,15 @@ class Database:
         matched_ids = sorted(p1_likes.intersection(p2_likes))
         recipes_by_id = {r["id"]: r for r in owner_recipes}
         matched_recipes = [recipes_by_id[rid] for rid in matched_ids if rid in recipes_by_id]
+        accepted_matches = json.loads(sess["accepted_matches_json"] or "[]")
 
         return {
             "code": sess["code"],
             "owner_user_id": owner_uid,
             "meal_type": meal_type,
             "target_days": json.loads(sess["target_days_json"]),
+            "accepted_matches": accepted_matches,
+            "is_completed": bool(sess["is_completed"]),
             "created_at": sess["created_at"],
             "p1_swiped_ids": p1_swiped,
             "p2_swiped_ids": p2_swiped,
@@ -1739,6 +2022,125 @@ class Database:
             "p2_like_count": len(p2_likes),
             "deck_recipes": deck_recipes,
             "matches": matched_recipes,
+        }
+
+    def update_tinder_session_days(self, code: str, target_days: list[str]) -> dict[str, Any]:
+        clean_code = code.strip().upper()
+        valid_days = [d[0] for d in DAYS_HU]
+        days = [d for d in target_days if d in valid_days] or ["hetfo"]
+        with self.connect() as conn:
+            cur = conn.execute(
+                "UPDATE tinder_sessions SET target_days_json = ?, is_completed = 0 WHERE code = ?",
+                (json.dumps(days, ensure_ascii=False), clean_code),
+            )
+            if cur.rowcount == 0:
+                raise ValueError(f"Nem található közös szoba ezzel a kóddal: {clean_code}")
+        return self.get_tinder_session(clean_code)
+
+    def accept_tinder_match(
+        self,
+        code: str,
+        recipe_id: int,
+        meal_type: str,
+        requested_days: list[str] | None,
+        actor_user_id: int,
+    ) -> dict[str, Any]:
+        clean_code = code.strip().upper()
+        valid_days = [d[0] for d in DAYS_HU]
+        sess = self.get_tinder_session(clean_code)
+        owner_uid = int(sess["owner_user_id"])
+        accepted_list: list[dict[str, Any]] = list(sess.get("accepted_matches") or [])
+
+        # Idempotens: ha a másik telefon már elfogadta ezt a receptet, ne írjuk felül más napra!
+        existing = next((a for a in accepted_list if int(a["recipe_id"]) == int(recipe_id)), None)
+        if existing:
+            return {
+                "already_accepted": True,
+                "placed_days": existing["days"],
+                "session": sess,
+                "plan": self.get_weekly_plan(user_id=owner_uid),
+                "aggregated_shopping": self.aggregate_shopping_list(user_id=owner_uid),
+            }
+
+        # Szerver-oldali hiteles naplista (a szoba target_days mezője az igazság forrása!)
+        use_days = [d for d in (sess.get("target_days") or []) if d in valid_days]
+        if not use_days and requested_days:
+            use_days = [d for d in requested_days if d in valid_days]
+        if not use_days:
+            use_days = ["hetfo"]
+
+        meal_norm = strip_accents((meal_type or sess["meal_type"] or "ebed").lower().strip())
+        if meal_norm not in MEAL_TYPES:
+            meal_norm = "ebed"
+
+        updated_owner_plan = self.set_weekly_meal_slots_manual(
+            day_keys=use_days,
+            meal_type=meal_norm,
+            recipe_id=int(recipe_id),
+            user_id=owner_uid,
+        )
+
+        rec = next(
+            (r for r in sess.get("deck_recipes", []) if int(r["id"]) == int(recipe_id)),
+            None,
+        )
+        rec_title = rec["title"] if rec else f"Recept #{recipe_id}"
+
+        # Ha a 2. fél még külön fiókkal játszik (nincs háztartásba kapcsolva), pontosan UGYANAZOKRA a napokra kerüljön be neki is!
+        if int(actor_user_id) != owner_uid:
+            self.set_weekly_meal_slots_manual(
+                day_keys=use_days,
+                meal_type=meal_norm,
+                custom_title=rec_title,
+                user_id=int(actor_user_id),
+            )
+
+        # Léptessük előre a szoba napjait a szerveren, hogy mindkét telefon ugyanarra a következő napra ugorjon!
+        planner = self.get_planner_settings(user_id=owner_uid)
+        plan_days = max(1, min(7, int(planner.get("plan_days", 7))))
+        avail = valid_days[:plan_days]
+        indices = [avail.index(d) for d in use_days if d in avail]
+        max_idx = max(indices) if indices else 0
+        span = max(1, len(use_days))
+
+        is_completed = (max_idx + 1) >= len(avail) or len(use_days) >= len(avail)
+        if is_completed:
+            next_days = avail[: min(span, len(avail))]
+        else:
+            next_start = max_idx + 1
+            next_days = avail[next_start : next_start + span] or [avail[0]]
+
+        accepted_list.append(
+            {
+                "recipe_id": int(recipe_id),
+                "title": rec_title,
+                "days": use_days,
+                "meal_type": meal_norm,
+            }
+        )
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE tinder_sessions
+                SET target_days_json = ?, accepted_matches_json = ?, is_completed = ?
+                WHERE code = ?
+                """,
+                (
+                    json.dumps(next_days, ensure_ascii=False),
+                    json.dumps(accepted_list, ensure_ascii=False),
+                    1 if is_completed else 0,
+                    clean_code,
+                ),
+            )
+
+        fresh_session = self.get_tinder_session(clean_code)
+        return {
+            "already_accepted": False,
+            "placed_days": use_days,
+            "is_completed": is_completed,
+            "session": fresh_session,
+            "plan": updated_owner_plan,
+            "aggregated_shopping": self.aggregate_shopping_list(user_id=owner_uid),
         }
 
     def record_tinder_swipe(

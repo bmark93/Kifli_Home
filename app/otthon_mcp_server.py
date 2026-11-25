@@ -79,7 +79,7 @@ class OptionalPinASGIWrapper:
         if supplied and self.db is not None:
             user = self.db.get_user_by_mcp_token(supplied)
             if user:
-                resolved_user_id = int(user["id"])
+                resolved_user_id = self.db.effective_workspace_id(user)
 
         if resolved_user_id is None and self.expected_token:
             if supplied and hmac.compare_digest(supplied, self.expected_token):
@@ -174,6 +174,7 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
         protein_g: float | None = None,
         carbs_g: float | None = None,
         fat_g: float | None = None,
+        is_public: bool | None = None,
     ) -> dict[str, Any]:
         return db.create_or_update_recipe(
             title=title,
@@ -189,8 +190,15 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
             protein_g=protein_g,
             carbs_g=carbs_g,
             fat_g=fat_g,
+            is_public=is_public,
             user_id=_uid(),
         )
+
+    @mcp.tool(
+        description="Recept láthatóságának (nyilvános közösségi vagy privát) beállítása."
+    )
+    def set_recipe_visibility(recipe_id: int, is_public: bool) -> dict[str, Any]:
+        return db.set_recipe_visibility(recipe_id=recipe_id, is_public=is_public, user_id=_uid())
 
     @mcp.tool(
         description="Recept 1 adagra jutó kalóriájának és makróinak (kcal_per_serving, protein_g, carbs_g, fat_g) beállítása."

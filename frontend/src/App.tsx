@@ -33,6 +33,12 @@ import {
   ImagePlus,
   LogOut,
   KeyRound,
+  PackageOpen,
+  Globe,
+  Lock,
+  Search,
+  Users,
+  BookmarkPlus,
 } from "lucide-react";
 import {
   apiFetch,
@@ -42,9 +48,13 @@ import {
   uploadRecipeImage,
   type AuthConfig,
   type ChatMessage,
+  type CommunityRecipe,
   type GeneralItem,
+  type HouseholdInfo,
   type Ingredient,
   type KifliCart,
+  type KifliRecipeItem,
+  type KifliRecipeSearchResponse,
   type OptimizePrivateLabelResponse,
   type PlannerSettings,
   type PrivateLabelSwapProposal,
@@ -59,7 +69,7 @@ import { FoodTinderSheet } from "./FoodTinderSheet";
 import { PrivateLabelSwapModal } from "./PrivateLabelSwapModal";
 import { LoginView } from "./LoginView";
 
-type TabId = "menu" | "chat" | "cart" | "general" | "recipes" | "settings";
+type TabId = "menu" | "chat" | "cart" | "general" | "recipes" | "pantry" | "settings";
 
 const DAYS: Array<{ key: string; short: string; label: string }> = [
   { key: "hetfo", short: "H", label: "Hétfő" },
@@ -189,7 +199,13 @@ export default function App() {
   const [genQty, setGenQty] = useState("1");
   const [genUnit, setGenUnit] = useState("db");
 
-  // Recept szűrő + modalok (Új & Szerkesztés) + Kaja Tinder
+  // Recept szűrő + Közösségi & Kifli Recept Válogatás + modalok
+  const [recipeSubTab, setRecipeSubTab] = useState<"mine" | "discover">("mine");
+  const [discoverSource, setDiscoverSource] = useState<"all" | "kifli" | "community" | "mine">("all");
+  const [discoverSearch, setDiscoverSearch] = useState<string>("");
+  const [communityRecipes, setCommunityRecipes] = useState<CommunityRecipe[]>([]);
+  const [kifliRecipes, setKifliRecipes] = useState<KifliRecipeItem[]>([]);
+  const [kifliRecipesLive, setKifliRecipesLive] = useState<boolean>(false);
   const [recipeFilter, setRecipeFilter] = useState<string>("");
   const [showNewRecipeSheet, setShowNewRecipeSheet] = useState(false);
   const [editingRecipeId, setEditingRecipeId] = useState<number | null>(null);
@@ -207,6 +223,7 @@ export default function App() {
   const [recProtein, setRecProtein] = useState<number>(0);
   const [recCarbs, setRecCarbs] = useState<number>(0);
   const [recFat, setRecFat] = useState<number>(0);
+  const [recIsPublic, setRecIsPublic] = useState<boolean>(false);
   const [recImageUrl, setRecImageUrl] = useState<string>("");
   const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
   const [pendingImagePreview, setPendingImagePreview] = useState<string>("");
@@ -226,6 +243,7 @@ export default function App() {
     setRecProtein(0);
     setRecCarbs(0);
     setRecFat(0);
+    setRecIsPublic(false);
     setRecImageUrl("");
     setPendingImageFile(null);
     setPendingImagePreview("");
@@ -245,6 +263,7 @@ export default function App() {
     setRecProtein(r.protein_g || 0);
     setRecCarbs(r.carbs_g || 0);
     setRecFat(r.fat_g || 0);
+    setRecIsPublic(Boolean(r.is_public));
     setRecImageUrl(r.image_url || "");
     setPendingImageFile(null);
     setPendingImagePreview("");
@@ -280,8 +299,12 @@ export default function App() {
     ai_recommendations_enabled: true,
     ai_recommendation_count: 1,
     ai_recommendation_meals: ["ebed"],
+    recipe_sources: ["own"],
   });
   const [smartRestock, setSmartRestock] = useState<SmartRestockResponse | null>(null);
+  const [household, setHousehold] = useState<HouseholdInfo | null>(null);
+  const [householdJoinInput, setHouseholdJoinInput] = useState<string>("");
+  const [copiedHouseholdCode, setCopiedHouseholdCode] = useState<boolean>(false);
   const [favoriteSwapModal, setFavoriteSwapModal] = useState<{
     autoSwappedCount: number;
     autoSavingsFt: number;
@@ -318,20 +341,104 @@ export default function App() {
 
   async function loadRecipesAndSettings() {
     try {
-      const [rc, stp, prf, ps] = await Promise.all([
+      const [rc, stp, prf, ps, hh] = await Promise.all([
         apiFetch<Recipe[]>("/api/recipes"),
         apiFetch<Array<{ key: string; display_name: string }>>("/api/staples"),
         apiFetch<any[]>("/api/preferences"),
         apiFetch<PlannerSettings>("/api/planner-settings"),
+        apiFetch<HouseholdInfo>("/api/household").catch(() => null),
       ]);
       setRecipes(rc);
       setStaples(stp);
       setPrefs(prf);
       setPlannerSettings(ps);
+      if (hh) setHousehold(hh);
     } catch {
       // silent
     }
   }
+
+  async function loadDiscoverHub(searchOverride?: string) {
+    const q = (searchOverride ?? discoverSearch).trim();
+    setBusyAction("discover");
+    try {
+      const [comm, kifliRes] = await Promise.all([
+        apiFetch<CommunityRecipe[]>(
+          `/api/community/recipes?search=${encodeURIComponent(q)}`
+        ),
+        apiFetch<KifliRecipeSearchResponse>(
+          `/api/kifli/recipes?query=${encodeURIComponent(q)}&limit=9`
+        ),
+      ]);
+      setCommunityRecipes(comm);
+      setKifliRecipes(kifliRes.recipes || []);
+      setKifliRecipesLive(Boolean(kifliRes.is_live_kifli));
+    } catch (e: any) {
+      notify(e.message, "err");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleToggleRecipeVisibility(r: Recipe) {
+    const nextPublic = !r.is_public;
+    try {
+      await apiFetch<Recipe>(`/api/recipes/${r.id}/visibility`, {
+        method: "POST",
+        body: JSON.stringify({ is_public: nextPublic }),
+      });
+      await loadRecipesAndSettings();
+      if (recipeSubTab === "discover") {
+        await loadDiscoverHub();
+      }
+      notify(
+        nextPublic
+          ? `🌍 "${r.title}" megosztva a Közösségi Recept válogatásban!`
+          : `🔒 "${r.title}" visszaállítva privátra.`
+      );
+    } catch (e: any) {
+      notify(e.message, "err");
+    }
+  }
+
+  async function handleCopyCommunityRecipe(r: CommunityRecipe) {
+    setBusyAction(`copy-comm-${r.id}`);
+    try {
+      await apiFetch<Recipe>(`/api/community/recipes/${r.id}/copy`, { method: "POST" });
+      await Promise.all([loadRecipesAndSettings(), loadDiscoverHub()]);
+      notify(`💾 "${r.title}" elmentve a saját receptjeid közé!`);
+    } catch (e: any) {
+      notify(e.message, "err");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleImportKifliRecipe(kr: KifliRecipeItem) {
+    setBusyAction(`import-kifli-${kr.kifli_recipe_id}`);
+    try {
+      await apiFetch<Recipe>(`/api/kifli/recipes/${kr.kifli_recipe_id}/import`, {
+        method: "POST",
+        body: JSON.stringify({
+          fallback_title: kr.title,
+          fallback_image_url: kr.image_url,
+          fallback_ingredients_preview: kr.ingredients_preview,
+        }),
+      });
+      await loadRecipesAndSettings();
+      notify(`🥐 "${kr.title}" sikeresen elmentve a saját receptjeid közé!`);
+    } catch (e: any) {
+      notify(e.message, "err");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  useEffect(() => {
+    if (activeTab === "recipes" && recipeSubTab === "discover" && communityRecipes.length === 0 && kifliRecipes.length === 0) {
+      loadDiscoverHub();
+    }
+  }, [activeTab, recipeSubTab]);
 
   async function savePlannerSettings(patch: Partial<PlannerSettings>) {
     const merged = { ...plannerSettings, ...patch };
@@ -692,6 +799,7 @@ export default function App() {
             protein_g: recProtein,
             carbs_g: recCarbs,
             fat_g: recFat,
+            is_public: recIsPublic,
             image_url: recImageUrl,
             instructions: recInstructions.trim(),
             source_url: recSourceUrl.trim(),
@@ -797,8 +905,16 @@ export default function App() {
       badge: pendingGeneralCount || undefined,
     },
     { id: "recipes", label: "Receptek", icon: UtensilsCrossed },
+    {
+      id: "pantry",
+      label: "Kamra",
+      icon: PackageOpen,
+      badge: staples.length || undefined,
+    },
     { id: "settings", label: "Beállítások", icon: Settings2 },
   ];
+
+  const mobileNavItems = navItems.filter((i) => i.id !== "settings");
 
   if (!authReady) {
     return (
@@ -1000,6 +1116,19 @@ export default function App() {
               : "⚠️ Kifli Login"}
           </span>
 
+          <button
+            type="button"
+            onClick={() => setActiveTab("settings")}
+            className={`p-2 rounded-xl border transition ${
+              activeTab === "settings"
+                ? "bg-emerald-500/15 border-emerald-500/35 text-emerald-700 dark:text-emerald-300"
+                : "bg-slate-100 dark:bg-white/5 border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300"
+            }`}
+            title="Beállítások"
+          >
+            <Settings2 className="w-4 h-4" />
+          </button>
+
           {authConfig.auth_required && currentUser && (
             <button
               type="button"
@@ -1054,7 +1183,7 @@ export default function App() {
                       className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-100 dark:text-emerald-300 bg-white/15 hover:bg-white/25 dark:bg-emerald-500/10 border border-white/20 dark:border-emerald-500/20 px-2.5 py-1 rounded-full mb-2 transition"
                     >
                       <Sparkles className="w-3.5 h-3.5" />
-                      {`${plannerSettings.household_size} fő · ${plannerSettings.plan_days} nap · 1 kaja ${plannerSettings.days_per_meal} napig ✎`}
+                      {`${plannerSettings.household_size} fő · ${plannerSettings.plan_days} nap · 1 fogás ${plannerSettings.days_per_meal} napra ✎`}
                     </button>
                     <h2 className="text-lg sm:text-2xl font-bold text-white">
                       Mit eszünk ezen a héten?
@@ -1814,7 +1943,7 @@ export default function App() {
                     type="submit"
                     className="col-span-4 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white dark:bg-emerald-500 dark:hover:bg-emerald-400 dark:text-slate-950 active:scale-95 font-bold text-sm flex items-center justify-center gap-1"
                   >
-                    <Plus className="w-4 h-4" /> Felír
+                    <Plus className="w-4 h-4" /> Hozzáadás
                   </button>
                 </div>
               </form>
@@ -1889,11 +2018,11 @@ export default function App() {
                                   }),
                                 });
                                 await Promise.all([loadCore(), loadSmartRestock()]);
-                                notify(`🧻 Felírva: ${sug.name}`);
+                                notify(`🧻 Hozzáadva a háztartási listához: ${sug.name}`);
                               }}
                               className="shrink-0 px-3 py-1.5 rounded-xl bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950 font-bold text-xs"
                             >
-                              + Felír
+                              + Hozzáadás
                             </button>
                           </div>
                         ))}
@@ -1985,30 +2114,40 @@ export default function App() {
           )}
 
           {/* =================================================================
-              5. TAB: RECEPTEK (Widescreen 4-oszlopos rács + Szerkesztés!)
+              5. TAB: RECEPTEK & KÖZÖSSÉGI / KIFLI RECEPT VÁLOGATÁS
              ================================================================= */}
           {activeTab === "recipes" && (
             <div className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex gap-1.5 overflow-x-auto no-scrollbar">
-                  {[
-                    { v: "", l: "Összes" },
-                    { v: "reggeli", l: "🌅 Reggeli" },
-                    { v: "ebed", l: "🍲 Ebéd" },
-                    { v: "vacsora", l: "🌙 Vacsora" },
-                  ].map((f) => (
-                    <button
-                      key={f.v}
-                      onClick={() => setRecipeFilter(f.v)}
-                      className={`px-3.5 py-2 rounded-2xl text-xs font-bold transition ${
-                        recipeFilter === f.v
-                          ? "bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950 shadow-sm"
-                          : "bg-white dark:bg-[#1C2218] text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-white/5"
-                      }`}
-                    >
-                      {f.l}
-                    </button>
-                  ))}
+              {/* Felső nézetválasztó: Saját receptjeim | Recept válogatás (Kifli + Közösség) */}
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="inline-flex rounded-2xl bg-white dark:bg-[#1C2218] p-1 border border-slate-200 dark:border-white/10 shadow-xs">
+                  <button
+                    type="button"
+                    onClick={() => setRecipeSubTab("mine")}
+                    className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 transition ${
+                      recipeSubTab === "mine"
+                        ? "bg-[#6FA014] text-white shadow-sm"
+                        : "text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white"
+                    }`}
+                  >
+                    <UtensilsCrossed className="w-3.5 h-3.5" />
+                    <span>Saját receptjeim ({recipes.length})</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRecipeSubTab("discover");
+                      loadDiscoverHub();
+                    }}
+                    className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-1.5 transition ${
+                      recipeSubTab === "discover"
+                        ? "bg-[#6FA014] text-white shadow-sm"
+                        : "text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white"
+                    }`}
+                  >
+                    <Globe className="w-3.5 h-3.5" />
+                    <span>Recept válogatás</span>
+                  </button>
                 </div>
 
                 <div className="flex gap-2">
@@ -2020,146 +2159,856 @@ export default function App() {
                   </button>
                   <button
                     onClick={openCreateRecipe}
-                    className="px-3.5 py-2 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white dark:bg-emerald-500 dark:hover:bg-emerald-400 dark:text-slate-950 text-xs font-bold flex items-center gap-1 shadow-sm"
+                    className="px-3.5 py-2 rounded-2xl bg-[#6FA014] hover:bg-[#5C870E] text-white text-xs font-bold flex items-center gap-1 shadow-sm"
                   >
                     <Plus className="w-4 h-4" /> Új recept
                   </button>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
-                {filteredRecipes.map((r) => {
-                  const hm = HEALTHY_META[r.healthy_score || 3] || HEALTHY_META[3];
-                  return (
-                    <div
-                      key={r.id}
-                      className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 overflow-hidden flex flex-col justify-between shadow-sm dark:shadow-none"
-                    >
-                      <div>
-                        {r.image_url && (
-                          <div
-                            onClick={() => openEditRecipe(r)}
-                            className="h-36 w-full overflow-hidden cursor-pointer relative"
-                          >
-                            <img
-                              src={r.image_url}
-                              alt={r.title}
-                              loading="lazy"
-                              className="w-full h-full object-cover hover:scale-105 transition duration-300"
-                            />
-                          </div>
-                        )}
-                        <div className="p-4">
-                          <div className="flex items-start justify-between gap-2">
-                            <h3
-                              onClick={() => openEditRecipe(r)}
-                              className="font-bold text-slate-900 dark:text-white leading-snug cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-300 transition"
-                            >
-                              {r.title}
-                            </h3>
-                            <div className="flex items-center gap-1 shrink-0">
-                              <button
+              {recipeSubTab === "mine" ? (
+                <>
+                  <div className="flex gap-1.5 overflow-x-auto no-scrollbar">
+                    {[
+                      { v: "", l: "Összes" },
+                      { v: "reggeli", l: "🌅 Reggeli" },
+                      { v: "ebed", l: "🍲 Ebéd" },
+                      { v: "vacsora", l: "🌙 Vacsora" },
+                    ].map((f) => (
+                      <button
+                        key={f.v}
+                        onClick={() => setRecipeFilter(f.v)}
+                        className={`px-3.5 py-2 rounded-2xl text-xs font-bold transition ${
+                          recipeFilter === f.v
+                            ? "bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950 shadow-sm"
+                            : "bg-white dark:bg-[#1C2218] text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-white/5"
+                        }`}
+                      >
+                        {f.l}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
+                    {filteredRecipes.map((r) => {
+                      const hm = HEALTHY_META[r.healthy_score || 3] || HEALTHY_META[3];
+                      return (
+                        <div
+                          key={r.id}
+                          className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 overflow-hidden flex flex-col justify-between shadow-sm dark:shadow-none"
+                        >
+                          <div>
+                            {r.image_url && (
+                              <div
                                 onClick={() => openEditRecipe(r)}
-                                className="text-slate-500 hover:text-emerald-600 dark:text-slate-400 dark:hover:text-emerald-300 hover:bg-slate-100 dark:hover:bg-white/5 rounded-lg p-1.5 transition"
-                                title="Recept szerkesztése"
+                                className="h-36 w-full overflow-hidden cursor-pointer relative"
                               >
-                                <Pencil className="w-4 h-4" />
-                              </button>
-                              <button
-                                onClick={async () => {
-                                  await apiFetch(`/api/recipes/${r.id}`, { method: "DELETE" });
-                                  await Promise.all([loadRecipesAndSettings(), loadCore()]);
-                                  notify("Recept törölve");
-                                }}
-                                className="text-slate-400 hover:text-rose-500 hover:bg-slate-100 dark:hover:bg-white/5 rounded-lg p-1.5 transition"
-                                title="Recept törlése"
-                              >
-                                <Trash2 className="w-4 h-4" />
-                              </button>
+                                <img
+                                  src={r.image_url}
+                                  alt={r.title}
+                                  loading="lazy"
+                                  className="w-full h-full object-cover hover:scale-105 transition duration-300"
+                                />
+                              </div>
+                            )}
+                            <div className="p-4">
+                              <div className="flex items-start justify-between gap-2">
+                                <h3
+                                  onClick={() => openEditRecipe(r)}
+                                  className="font-bold text-slate-900 dark:text-white leading-snug cursor-pointer hover:text-emerald-600 dark:hover:text-emerald-300 transition"
+                                >
+                                  {r.title}
+                                </h3>
+                                <div className="flex items-center gap-0.5 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleRecipeVisibility(r)}
+                                    className={`rounded-lg p-1.5 transition ${
+                                      r.is_public
+                                        ? "text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20"
+                                        : "text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/5"
+                                    }`}
+                                    title={
+                                      r.is_public
+                                        ? "Nyilvános (kattints, hogy privát legyen)"
+                                        : "Privát (kattints a közösségi megosztáshoz)"
+                                    }
+                                  >
+                                    {r.is_public ? (
+                                      <Globe className="w-4 h-4" />
+                                    ) : (
+                                      <Lock className="w-4 h-4" />
+                                    )}
+                                  </button>
+                                  <button
+                                    onClick={() => openEditRecipe(r)}
+                                    className="text-slate-500 hover:text-emerald-600 dark:text-slate-400 dark:hover:text-emerald-300 hover:bg-slate-100 dark:hover:bg-white/5 rounded-lg p-1.5 transition"
+                                    title="Recept szerkesztése"
+                                  >
+                                    <Pencil className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    onClick={async () => {
+                                      await apiFetch(`/api/recipes/${r.id}`, { method: "DELETE" });
+                                      await Promise.all([loadRecipesAndSettings(), loadCore()]);
+                                      notify("Recept törölve");
+                                    }}
+                                    className="text-slate-400 hover:text-rose-500 hover:bg-slate-100 dark:hover:bg-white/5 rounded-lg p-1.5 transition"
+                                    title="Recept törlése"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                <span
+                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                                    r.is_public
+                                      ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30"
+                                      : "bg-slate-100 dark:bg-white/5 text-slate-500 border-slate-200 dark:border-white/10"
+                                  }`}
+                                >
+                                  {r.is_public ? "🌍 Nyilvános" : "🔒 Privát"}
+                                </span>
+                                <span
+                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${hm.badgeClass}`}
+                                >
+                                  {hm.emoji} {r.healthy_score || 3}/5 · {hm.label}
+                                </span>
+                                {r.categories.map((c) => (
+                                  <span
+                                    key={c}
+                                    className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:bg-white/5 dark:text-emerald-300"
+                                  >
+                                    {c}
+                                  </span>
+                                ))}
+                                <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-400">
+                                  {r.servings} adag
+                                </span>
+                                {r.kcal_per_serving > 0 && (
+                                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-500/20">
+                                    🔥 {r.kcal_per_serving} kcal · P {Math.round(r.protein_g)}g · CH{" "}
+                                    {Math.round(r.carbs_g)}g · Zs {Math.round(r.fat_g)}g
+                                  </span>
+                                )}
+                              </div>
+
+                              <div className="flex flex-wrap gap-1.5 mt-3">
+                                {r.ingredients.map((ing, i) => (
+                                  <span
+                                    key={i}
+                                    className="text-xs px-2.5 py-1 rounded-xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/5 text-slate-700 dark:text-slate-300"
+                                  >
+                                    {ing.name}{" "}
+                                    <span className="text-slate-400 dark:text-slate-500">
+                                      {ing.quantity} {ing.unit}
+                                    </span>
+                                  </span>
+                                ))}
+                              </div>
                             </div>
                           </div>
 
-                          <div className="flex flex-wrap gap-1.5 mt-1.5">
-                            <span
-                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${hm.badgeClass}`}
-                            >
-                              {hm.emoji} {r.healthy_score || 3}/5 · {hm.label}
-                            </span>
-                            {r.categories.map((c) => (
-                              <span
-                                key={c}
-                                className="text-[10px] font-bold uppercase px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-700 dark:bg-white/5 dark:text-emerald-300"
-                              >
-                                {c}
-                              </span>
-                            ))}
-                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-400">
-                              {r.servings} adag
-                            </span>
-                            {r.kcal_per_serving > 0 && (
-                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-500/20">
-                                🔥 {r.kcal_per_serving} kcal · P {Math.round(r.protein_g)}g · CH{" "}
-                                {Math.round(r.carbs_g)}g · Zs {Math.round(r.fat_g)}g
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="flex flex-wrap gap-1.5 mt-3">
-                            {r.ingredients.map((ing, i) => (
-                              <span
-                                key={i}
-                                className="text-xs px-2.5 py-1 rounded-xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/5 text-slate-700 dark:text-slate-300"
-                              >
-                                {ing.name}{" "}
-                                <span className="text-slate-400 dark:text-slate-500">
-                                  {ing.quantity} {ing.unit}
-                                </span>
-                              </span>
-                            ))}
-                          </div>
+                          {r.instructions && (
+                            <p className="text-xs text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-white/5 px-4 py-2.5">
+                              {r.instructions}
+                            </p>
+                          )}
                         </div>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : (
+                /* 🌍 RECEPT VÁLOGATÁS: Kifli.hu + Közösségi nyilvános receptek + Saját */
+                <div className="space-y-4">
+                  <div className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-xs">
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        loadDiscoverHub(discoverSearch);
+                      }}
+                      className="flex-1 flex gap-2"
+                    >
+                      <div className="relative flex-1">
+                        <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={discoverSearch}
+                          onChange={(e) => setDiscoverSearch(e.target.value)}
+                          placeholder="Keresés Kifli.hu és közösségi receptek között (pl. lazac, leves, vegán, reggeli)..."
+                          className="w-full pl-9 pr-3 py-2.5 rounded-2xl text-sm bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#6FA014]"
+                        />
                       </div>
+                      <button
+                        type="submit"
+                        disabled={busyAction === "discover"}
+                        className="px-4 py-2.5 rounded-2xl bg-[#6FA014] hover:bg-[#5C870E] text-white font-bold text-xs shrink-0"
+                      >
+                        {busyAction === "discover" ? "Keresés..." : "Keresés"}
+                      </button>
+                    </form>
 
-                      {r.instructions && (
-                        <p className="text-xs text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-white/5 px-4 py-2.5">
-                          {r.instructions}
-                        </p>
+                    <div className="flex gap-1.5 overflow-x-auto no-scrollbar shrink-0">
+                      {(
+                        [
+                          { id: "all", l: "Összes" },
+                          { id: "kifli", l: `🥐 Kifli.hu (${kifliRecipes.length})` },
+                          { id: "community", l: `👥 Közösség (${communityRecipes.length})` },
+                          { id: "mine", l: `📖 Saját (${recipes.length})` },
+                        ] as const
+                      ).map((src) => (
+                        <button
+                          key={src.id}
+                          type="button"
+                          onClick={() => setDiscoverSource(src.id)}
+                          className={`px-3 py-2 rounded-2xl text-xs font-bold border transition whitespace-nowrap ${
+                            discoverSource === src.id
+                              ? "bg-slate-900 text-white border-slate-900 dark:bg-emerald-500 dark:text-slate-950 dark:border-emerald-500"
+                              : "bg-slate-50 dark:bg-[#121510] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10"
+                          }`}
+                        >
+                          {src.l}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* KIFLI.HU RECEPTEK SZEKCIÓ */}
+                  {(discoverSource === "all" || discoverSource === "kifli") && kifliRecipes.length > 0 && (
+                    <div className="space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <h3 className="font-extrabold text-sm sm:text-base text-slate-900 dark:text-white flex items-center gap-2">
+                          <span>🥐 Kifli.hu receptek</span>
+                          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+                            {kifliRecipesLive ? "Élő Kifli szinkron" : "Kifli inspiráció"}
+                          </span>
+                        </h3>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
+                        {kifliRecipes.map((kr) => (
+                          <div
+                            key={`kifli-${kr.kifli_recipe_id}`}
+                            className="rounded-3xl bg-white dark:bg-[#1C2218] border border-emerald-500/20 overflow-hidden flex flex-col justify-between shadow-sm"
+                          >
+                            <div>
+                              {kr.image_url && (
+                                <div className="h-36 w-full overflow-hidden relative">
+                                  <img
+                                    src={kr.image_url}
+                                    alt={kr.title}
+                                    loading="lazy"
+                                    className="w-full h-full object-cover"
+                                  />
+                                  <span className="absolute top-2.5 left-2.5 text-[10px] font-extrabold px-2.5 py-1 rounded-full bg-[#6FA014] text-white shadow">
+                                    🥐 Kifli.hu
+                                  </span>
+                                </div>
+                              )}
+                              <div className="p-4 space-y-2">
+                                <h4 className="font-bold text-slate-900 dark:text-white leading-snug">
+                                  {kr.title}
+                                </h4>
+                                <div className="flex flex-wrap gap-1.5 text-[10px]">
+                                  <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-300 font-semibold">
+                                    {kr.servings} adag
+                                  </span>
+                                  {kr.duration && (
+                                    <span className="px-2 py-0.5 rounded-full bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-300">
+                                      ⏱️ {kr.duration}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-3">
+                                  {kr.ingredients_preview}
+                                </p>
+                              </div>
+                            </div>
+                            <div className="px-4 pb-4">
+                              <button
+                                type="button"
+                                disabled={busyAction === `import-kifli-${kr.kifli_recipe_id}`}
+                                onClick={() => handleImportKifliRecipe(kr)}
+                                className="w-full py-2.5 rounded-2xl bg-[#6FA014] hover:bg-[#5C870E] text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition disabled:opacity-50"
+                              >
+                                <BookmarkPlus className="w-4 h-4" />
+                                <span>
+                                  {busyAction === `import-kifli-${kr.kifli_recipe_id}`
+                                    ? "Mentés..."
+                                    : "Mentés a receptjeim közé"}
+                                </span>
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* KÖZÖSSÉGI NYILVÁNOS RECEPTEK SZEKCIÓ */}
+                  {(discoverSource === "all" || discoverSource === "community") && (
+                    <div className="space-y-2.5">
+                      <h3 className="font-extrabold text-sm sm:text-base text-slate-900 dark:text-white flex items-center gap-2">
+                        <Users className="w-4 h-4 text-[#6FA014]" />
+                        <span>Közösségi receptek</span>
+                      </h3>
+                      {communityRecipes.length === 0 ? (
+                        <div className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200 dark:border-white/5 p-8 text-center text-xs sm:text-sm text-slate-500">
+                          Még nincs nyilvános közösségi recept. Állíts nyilvánosra (🌍) egy saját receptet, hogy mások is láthassák!
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
+                          {communityRecipes.map((cr) => {
+                            const hm = HEALTHY_META[cr.healthy_score || 3] || HEALTHY_META[3];
+                            return (
+                              <div
+                                key={`comm-${cr.id}`}
+                                className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 overflow-hidden flex flex-col justify-between shadow-sm"
+                              >
+                                <div>
+                                  {cr.image_url && (
+                                    <div className="h-36 w-full overflow-hidden relative">
+                                      <img
+                                        src={cr.image_url}
+                                        alt={cr.title}
+                                        loading="lazy"
+                                        className="w-full h-full object-cover"
+                                      />
+                                    </div>
+                                  )}
+                                  <div className="p-4 space-y-2">
+                                    <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-slate-400">
+                                      <span className="font-semibold text-emerald-700 dark:text-emerald-300 truncate">
+                                        👤 {cr.author_name}
+                                      </span>
+                                      {cr.copied_count ? (
+                                        <span className="shrink-0">💾 {cr.copied_count}× mentve</span>
+                                      ) : null}
+                                    </div>
+                                    <h4 className="font-bold text-slate-900 dark:text-white leading-snug">
+                                      {cr.title}
+                                    </h4>
+                                    <div className="flex flex-wrap gap-1.5">
+                                      <span
+                                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${hm.badgeClass}`}
+                                      >
+                                        {hm.emoji} {cr.healthy_score}/5
+                                      </span>
+                                      {cr.kcal_per_serving > 0 && (
+                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-800 dark:text-amber-300">
+                                          🔥 {cr.kcal_per_serving} kcal
+                                        </span>
+                                      )}
+                                    </div>
+                                    <div className="flex flex-wrap gap-1 pt-1">
+                                      {cr.ingredients.slice(0, 6).map((ing, i) => (
+                                        <span
+                                          key={i}
+                                          className="text-[11px] px-2 py-0.5 rounded-lg bg-slate-50 dark:bg-[#121510] border border-slate-200/70 dark:border-white/5 text-slate-600 dark:text-slate-300"
+                                        >
+                                          {ing.name}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="px-4 pb-4">
+                                  {cr.is_mine ? (
+                                    <div className="w-full py-2 rounded-2xl bg-slate-100 dark:bg-white/5 text-center text-xs font-semibold text-slate-500">
+                                      Saját megosztott recepted
+                                    </div>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      disabled={busyAction === `copy-comm-${cr.id}`}
+                                      onClick={() => handleCopyCommunityRecipe(cr)}
+                                      className="w-full py-2.5 rounded-2xl bg-slate-900 hover:bg-slate-800 dark:bg-emerald-500 dark:hover:bg-emerald-400 text-white dark:text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 transition disabled:opacity-50"
+                                    >
+                                      <BookmarkPlus className="w-4 h-4" />
+                                      <span>
+                                        {busyAction === `copy-comm-${cr.id}`
+                                          ? "Mentés..."
+                                          : "Mentés a receptjeim közé"}
+                                      </span>
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
                       )}
                     </div>
-                  );
-                })}
+                  )}
+
+                  {/* SAJÁT RECEPTEK A VÁLOGATÁSBAN (ha 'Saját' szűrőn vagyunk) */}
+                  {discoverSource === "mine" && (
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
+                      {recipes
+                        .filter(
+                          (r) =>
+                            !discoverSearch.trim() ||
+                            r.title.toLowerCase().includes(discoverSearch.trim().toLowerCase())
+                        )
+                        .map((r) => (
+                          <div
+                            key={`own-${r.id}`}
+                            onClick={() => openEditRecipe(r)}
+                            className="cursor-pointer rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-4 space-y-2 shadow-sm hover:border-[#6FA014]/50 transition"
+                          >
+                            <div className="flex items-center justify-between text-[11px]">
+                              <span className="font-bold text-emerald-700 dark:text-emerald-300">
+                                {r.is_public ? "🌍 Saját (Nyilvános)" : "🔒 Saját (Privát)"}
+                              </span>
+                              <span className="text-slate-400">{r.servings} adag</span>
+                            </div>
+                            <div className="font-bold text-slate-900 dark:text-white">{r.title}</div>
+                            <div className="text-xs text-slate-500 line-clamp-2">
+                              {r.ingredients.map((i) => i.name).join(", ")}
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* =================================================================
+              6. TAB: KAMRA (Dedikált Kamra-alapanyagok + Kedvenc Márkák oldal!)
+             ================================================================= */}
+          {activeTab === "pantry" && (
+            <div className="space-y-5">
+              {/* Hero fejléc */}
+              <div className="rounded-3xl bg-gradient-to-br from-[#6FA014] via-[#5C870E] to-[#3F620A] dark:from-[#365314] dark:via-[#263B0F] dark:to-[#182210] p-5 sm:p-6 text-white shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-100 bg-white/15 border border-white/20 px-2.5 py-1 rounded-full mb-2">
+                    <PackageOpen className="w-3.5 h-3.5" />
+                    Otthoni készlet &amp; márkák
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-extrabold">Kamra &amp; Kedvencek</h2>
+                  <p className="text-xs sm:text-sm text-emerald-50/90 mt-1">
+                    Az itt szereplő alapanyagokat feltételezzük, hogy vannak otthon, így nem kerülnek bele feleslegesen minden heti kosárba.
+                  </p>
+                </div>
+                <div className="flex gap-3 shrink-0">
+                  <div className="rounded-2xl bg-white/15 backdrop-blur px-4 py-2.5 text-center border border-white/15">
+                    <div className="text-xl font-black">{staples.length}</div>
+                    <div className="text-[11px] text-emerald-100">Kamra tétel</div>
+                  </div>
+                  <div className="rounded-2xl bg-white/15 backdrop-blur px-4 py-2.5 text-center border border-white/15">
+                    <div className="text-xl font-black">{prefs.length}</div>
+                    <div className="text-[11px] text-emerald-100">Kedvenc márka</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+                {/* BAL / FŐ PANEL (8 oszlop): Kamra-alapanyagok áttekinthető kártyarácsban */}
+                <div className="xl:col-span-8 rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 className="font-bold text-base sm:text-lg text-slate-900 dark:text-white">
+                        🧂 Kamra-alapanyagok
+                      </h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Ezek az alapanyagok jellemzően megtalálhatók otthon — az AI a kosárösszeállításnál külön megkérdezi, ha mégis elfogyott volna valamelyik.
+                      </p>
+                    </div>
+                  </div>
+
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      if (!newStaple.trim()) return;
+                      await apiFetch("/api/staples", {
+                        method: "POST",
+                        body: JSON.stringify({ name: newStaple.trim() }),
+                      });
+                      setNewStaple("");
+                      await Promise.all([loadRecipesAndSettings(), loadCore()]);
+                      notify("🧂 Alapanyag hozzáadva a kamrához!");
+                    }}
+                    className="flex gap-2"
+                  >
+                    <input
+                      type="text"
+                      value={newStaple}
+                      onChange={(e) => setNewStaple(e.target.value)}
+                      placeholder="Új alapanyag (pl. mustár, fahéj, szójaszósz, oregánó)..."
+                      className="flex-1 bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white rounded-2xl px-4 py-3 text-sm border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#6FA014]"
+                    />
+                    <button
+                      type="submit"
+                      className="px-5 py-3 rounded-2xl bg-[#6FA014] hover:bg-[#5C870E] text-white font-bold text-xs sm:text-sm shrink-0 shadow-sm transition"
+                    >
+                      + Hozzáadás
+                    </button>
+                  </form>
+
+                  {/* Gyors-javaslatok, amik még nincsenek a kamrában */}
+                  {(() => {
+                    const existingKeys = new Set(staples.map((s) => s.display_name.toLowerCase()));
+                    const quickIdeas = [
+                      "mustár",
+                      "ketchup",
+                      "szójaszósz",
+                      "oregánó",
+                      "bazsalikom",
+                      "majoranna",
+                      "kömény",
+                      "fahéj",
+                      "sütőpor",
+                      "méz",
+                    ].filter((item) => !existingKeys.has(item));
+                    if (!quickIdeas.length) return null;
+                    return (
+                      <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                        <span className="text-slate-400 font-medium mr-1">Gyors felvétel:</span>
+                        {quickIdeas.slice(0, 6).map((idea) => (
+                          <button
+                            key={idea}
+                            type="button"
+                            onClick={async () => {
+                              await apiFetch("/api/staples", {
+                                method: "POST",
+                                body: JSON.stringify({ name: idea }),
+                              });
+                              await Promise.all([loadRecipesAndSettings(), loadCore()]);
+                            }}
+                            className="px-2.5 py-1 rounded-xl bg-slate-100 hover:bg-emerald-500/15 dark:bg-white/5 dark:hover:bg-emerald-500/20 text-slate-600 dark:text-slate-300 hover:text-emerald-700 dark:hover:text-emerald-300 border border-slate-200/80 dark:border-white/10 transition"
+                          >
+                            + {idea}
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })()}
+
+                  {staples.length === 0 ? (
+                    <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200 dark:border-white/5 p-8 text-center text-sm text-slate-500">
+                      Még nincs felvett kamra-alapanyag.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5 pt-1">
+                      {staples.map((s) => (
+                        <div
+                          key={s.key}
+                          className="group flex items-center justify-between gap-2 rounded-2xl bg-[#F6F6F2] dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 px-3.5 py-3 text-sm font-semibold text-slate-800 dark:text-slate-100"
+                        >
+                          <span className="truncate">{s.display_name}</span>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await apiFetch(`/api/staples/${encodeURIComponent(s.key)}`, {
+                                method: "DELETE",
+                              });
+                              await Promise.all([loadRecipesAndSettings(), loadCore()]);
+                            }}
+                            className="text-slate-400 hover:text-rose-500 p-1 rounded-lg hover:bg-rose-500/10 transition shrink-0"
+                            title="Eltávolítás a kamrából"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* JOBB PANEL (4 oszlop): Kedvenc Kifli termékek */}
+                <div className="xl:col-span-4 rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
+                  <div>
+                    <h3 className="font-bold text-base sm:text-lg text-slate-900 dark:text-white">
+                      ⭐ Kedvenc márkák
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                      A Kosár fülön bármelyik terméknél megjelölheted a ⭐ csillaggal — ezeket az AI előnyben részesíti, a sajátmárka-optimalizáló pedig külön megkérdez róluk.
+                    </p>
+                  </div>
+
+                  {prefs.length === 0 ? (
+                    <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200 dark:border-white/5 p-6 text-center text-xs text-slate-500">
+                      Még nincs rögzített kedvenc termék.
+                    </div>
+                  ) : (
+                    <div className="space-y-2.5">
+                      {prefs.map((p) => (
+                        <div
+                          key={p.ingredient_key}
+                          className="flex items-center justify-between gap-2 rounded-2xl bg-[#F6F6F2] dark:bg-[#121510] border border-slate-200/80 dark:border-white/5 px-3.5 py-3 text-xs"
+                        >
+                          <div className="min-w-0">
+                            <div className="font-bold text-emerald-700 dark:text-emerald-300 truncate">
+                              {p.ingredient_label}
+                            </div>
+                            <div className="text-slate-600 dark:text-slate-300 mt-0.5 line-clamp-2">
+                              {p.kifli_product_name}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await apiFetch(`/api/preferences/${encodeURIComponent(p.ingredient_key)}`, {
+                                method: "DELETE",
+                              });
+                              await loadRecipesAndSettings();
+                            }}
+                            className="text-slate-400 hover:text-rose-500 p-1.5 rounded-lg hover:bg-rose-500/10 shrink-0"
+                            title="Eltávolítás"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}
 
           {/* =================================================================
-              6. TAB: KIFLI MCP OAUTH, KAMRA & KEDVENC MÁRKÁK (Widescreen 3-hasábos!)
+              7. TAB: BEÁLLÍTÁSOK (Minden beállítás egy tiszta helyen!)
              ================================================================= */}
           {activeTab === "settings" && (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+              {/* 🏠 Családi / Háztartási Fiók Összekapcsolás */}
+              <div className="lg:col-span-3 rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <Users className="w-5 h-5 text-[#6FA014] dark:text-[#A3E635] shrink-0" />
+                    <div>
+                      <h2 className="font-bold text-base text-slate-900 dark:text-white">
+                        Családi / Háztartási fiók összekapcsolása
+                      </h2>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Kapcsold össze a háztartás tagjait (pár, gyerekek, lakótársak): mindenki közös Kifli.hu kosarat, receptkönyvet, kamrát, heti menüt és AI-kulcsot használ.
+                      </p>
+                    </div>
+                  </div>
+                  {household && (
+                    <span className="text-xs font-bold px-3 py-1 rounded-full bg-[#6FA014]/15 text-[#47690C] dark:text-[#A3E635]">
+                      {household.members.length} fő a háztartásban
+                    </span>
+                  )}
+                </div>
+
+                {household && (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {/* Bal oldal: Saját kód + tagok listája */}
+                    <div className="rounded-2xl bg-[#F6F6F2] dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-4 space-y-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                            Háztartás meghívókódja
+                          </div>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="font-mono text-xl font-black tracking-[0.2em] text-slate-900 dark:text-white">
+                              {household.join_code || "—"}
+                            </span>
+                            {household.join_code && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(household.join_code);
+                                  setCopiedHouseholdCode(true);
+                                  setTimeout(() => setCopiedHouseholdCode(false), 1800);
+                                  notify("Háztartási kód másolva!");
+                                }}
+                                className="px-2.5 py-1 rounded-lg bg-white dark:bg-[#1C2218] border border-slate-200 dark:border-white/10 text-xs font-bold text-slate-700 dark:text-slate-200 hover:border-[#6FA014] flex items-center gap-1"
+                              >
+                                {copiedHouseholdCode ? (
+                                  <>
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> Másolva
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-3.5 h-3.5" /> Másolás
+                                  </>
+                                )}
+                              </button>
+                            )}
+                            {household.is_owner && !currentUser?.is_demo && (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  const res = await apiFetch<HouseholdInfo>("/api/household/rotate-code", {
+                                    method: "POST",
+                                  });
+                                  setHousehold(res);
+                                  notify("Új háztartási meghívókód generálva.");
+                                }}
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-white/60 dark:hover:bg-white/10"
+                                title="Új kód generálása"
+                              >
+                                <RefreshCw className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5 pt-1">
+                        <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                          Összekapcsolt tagok
+                        </div>
+                        {household.members.map((m) => (
+                          <div
+                            key={m.id}
+                            className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-white dark:bg-[#1C2218] border border-slate-200/70 dark:border-white/5 text-xs"
+                          >
+                            <div className="min-w-0">
+                              <span className="font-bold text-slate-900 dark:text-white">
+                                {m.display_name}
+                              </span>
+                              {m.is_me && (
+                                <span className="ml-1.5 text-[10px] font-bold text-[#6FA014] dark:text-[#A3E635]">
+                                  (Te)
+                                </span>
+                              )}
+                              <div className="text-[11px] text-slate-400 truncate">{m.email}</div>
+                            </div>
+                            <div className="flex items-center gap-1.5 shrink-0">
+                              {m.is_owner ? (
+                                <span className="px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 text-[10px] font-bold">
+                                  Tulajdonos
+                                </span>
+                              ) : (
+                                <>
+                                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold">
+                                    Tag
+                                  </span>
+                                  {household.is_owner && !m.is_me && (
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        const res = await apiFetch<HouseholdInfo>(
+                                          `/api/household/members/${m.id}`,
+                                          { method: "DELETE" }
+                                        );
+                                        setHousehold(res);
+                                        notify(`${m.display_name} eltávolítva a háztartásból.`);
+                                      }}
+                                      className="p-1 text-slate-400 hover:text-rose-500"
+                                      title="Tag eltávolítása"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Jobb oldal: Csatlakozás meglévő háztartáshoz vagy kilépés */}
+                    <div className="rounded-2xl bg-[#F6F6F2] dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-4 flex flex-col justify-between gap-3">
+                      {household.is_owner ? (
+                        <form
+                          onSubmit={async (e) => {
+                            e.preventDefault();
+                            if (!householdJoinInput.trim()) return;
+                            try {
+                              const res = await apiFetch<HouseholdInfo>("/api/household/join", {
+                                method: "POST",
+                                body: JSON.stringify({ join_code: householdJoinInput.trim() }),
+                              });
+                              setHousehold(res);
+                              setHouseholdJoinInput("");
+                              await Promise.all([loadCore(), loadRecipesAndSettings()]);
+                              notify(`Csatlakoztál ${res.owner_name} háztartásához!`);
+                            } catch (err: any) {
+                              notify(err.message || "Sikertelen csatlakozás", "err");
+                            }
+                          }}
+                          className="space-y-3"
+                        >
+                          <div>
+                            <div className="text-xs font-bold text-slate-900 dark:text-white">
+                              Csatlakozás másik háztartáshoz
+                            </div>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">
+                              Ha a párod vagy családtagod már beállította a Kifli fiókot és a recepteket, írd be ide a 6 karakteres kódját — azonnal a közös felületet látod!
+                            </p>
+                          </div>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              maxLength={8}
+                              value={householdJoinInput}
+                              onChange={(e) => setHouseholdJoinInput(e.target.value.toUpperCase())}
+                              placeholder="6 jegyű kód (pl. H7K9M2)"
+                              disabled={Boolean(currentUser?.is_demo)}
+                              className="flex-1 font-mono font-bold uppercase tracking-widest bg-white dark:bg-[#1C2218] text-slate-900 dark:text-white rounded-xl px-3.5 py-2.5 text-sm border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#6FA014]"
+                            />
+                            <button
+                              type="submit"
+                              disabled={!householdJoinInput.trim() || Boolean(currentUser?.is_demo)}
+                              className="px-4 py-2.5 rounded-xl bg-[#6FA014] hover:bg-[#5C870E] text-white font-bold text-xs disabled:opacity-40"
+                            >
+                              Összekapcsolás
+                            </button>
+                          </div>
+                        </form>
+                      ) : (
+                        <div className="space-y-3">
+                          <div className="text-xs font-bold text-emerald-700 dark:text-emerald-300">
+                            ✅ Összekapcsolva {household.owner_name} háztartásával
+                          </div>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                            Közösen látjátok és szerkesztitek a heti menüt, a recepteket, a kamrát, a Kifli.hu kosarat és az AI beállításokat. Bármikor visszaválthatsz a saját külön fiókodra.
+                          </p>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const res = await apiFetch<HouseholdInfo>("/api/household/leave", {
+                                method: "POST",
+                              });
+                              setHousehold(res);
+                              await Promise.all([loadCore(), loadRecipesAndSettings()]);
+                              notify("Kiléptél a közös háztartásból, újra a saját fiókodat látod.");
+                            }}
+                            className="px-4 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-700 dark:text-rose-300 font-bold text-xs"
+                          >
+                            Kilépés a közös háztartásból
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Kifli OAuth kártya */}
-              <div className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 space-y-4 shadow-sm dark:shadow-none">
+              <div className="lg:col-span-3 rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2.5">
                     <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                    <h2 className="font-bold text-base text-slate-900 dark:text-white">
-                      Kifli.hu MCP
-                    </h2>
+                    <div>
+                      <h2 className="font-bold text-base text-slate-900 dark:text-white">
+                        Kifli.hu fiók összekötése (MCP)
+                      </h2>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        OAuth 2.1 biztonságos kapcsolat — a jelszavadat az alkalmazás nem látja és nem tárolja, a munkamenet automatikusan megújul.
+                      </p>
+                    </div>
                   </div>
                   <span
-                    className={`text-xs font-bold px-3 py-1 rounded-full ${
+                    className={`text-xs font-bold px-3 py-1 rounded-full shrink-0 ${
                       status?.kifli.authenticated
                         ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
                         : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
                     }`}
                   >
-                    {status?.kifli.authenticated ? "Csatlakoztatva" : "Nincs belépve"}
+                    {status?.kifli.authenticated ? "Csatlakoztatva" : "Nincs összekötve"}
                   </span>
                 </div>
-
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  OAuth 2.1 PKCE kapcsolat: a jelszavadat soha nem látja és nem tárolja az app, a frissítő token pedig automatikusan megújul a szerveren.
-                </p>
 
                 <div className="flex flex-wrap gap-2.5">
                   <button
@@ -2180,11 +3029,11 @@ export default function App() {
                       onClick={async () => {
                         await apiFetch("/api/kifli/logout", { method: "POST" });
                         await loadCore();
-                        notify("Kijelentkezve a Kifli MCP-ből");
+                        notify("Kijelentkezve a Kifli.hu fiókból.");
                       }}
-                      className="px-4 py-2.5 rounded-2xl bg-slate-100 dark:bg-white/5 text-slate-700 dark:text-slate-300 text-xs"
+                      className="px-4 py-2.5 rounded-2xl bg-slate-100 dark:bg-white/5 text-slate-700 dark:text-slate-300 text-xs font-semibold"
                     >
-                      Kijelentkezés
+                      Kapcsolat bontása
                     </button>
                   )}
                 </div>
@@ -2201,7 +3050,7 @@ export default function App() {
                         setLoginUrl("");
                         setCallbackUrl("");
                         await loadCore();
-                        notify("✅ Kifli.hu sikeresen összekötve!");
+                        notify("✅ Kifli.hu fiók sikeresen összekötve!");
                       } catch (err: any) {
                         notify(err.message, "err");
                       }
@@ -2209,8 +3058,7 @@ export default function App() {
                     className="space-y-2 pt-3 border-t border-slate-200 dark:border-white/5"
                   >
                     <p className="text-xs text-amber-700 dark:text-amber-200">
-                      Ha távoli gépről vagy telefonról léptél be, másold be ide a kapott{" "}
-                      <code>http://localhost:3334/oauth/callback?code=...</code> címet:
+                      Belépés után a böngésző átirányít a <code>http://localhost:3334/oauth/callback?code=...</code> címre. Másold ki a címsorból a teljes URL-t és illeszd be ide:
                     </p>
                     <div className="flex gap-2">
                       <input
@@ -2232,122 +3080,23 @@ export default function App() {
                 )}
               </div>
 
-              {/* Kamra alapanyagok */}
-              <div className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 space-y-3 shadow-sm dark:shadow-none">
-                <h3 className="font-bold text-base text-slate-900 dark:text-white">
-                  🧂 Kamra-alapanyagok
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Ezeket alapból nem dobálja be minden héten a Kifli kosárba (só, bors, olaj, liszt...).
-                </p>
-                <form
-                  onSubmit={async (e) => {
-                    e.preventDefault();
-                    if (!newStaple.trim()) return;
-                    await apiFetch("/api/staples", {
-                      method: "POST",
-                      body: JSON.stringify({ name: newStaple.trim() }),
-                    });
-                    setNewStaple("");
-                    await loadRecipesAndSettings();
-                  }}
-                  className="flex gap-2"
-                >
-                  <input
-                    type="text"
-                    value={newStaple}
-                    onChange={(e) => setNewStaple(e.target.value)}
-                    placeholder="Pl. mustár, fahéj..."
-                    className="flex-1 bg-slate-100 dark:bg-[#121510] rounded-2xl px-4 py-2.5 text-sm border border-slate-200 dark:border-white/10"
-                  />
-                  <button
-                    type="submit"
-                    className="px-4 py-2.5 rounded-2xl bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950 font-bold text-xs shrink-0"
-                  >
-                    + Hozzáad
-                  </button>
-                </form>
-
-                <div className="flex flex-wrap gap-2 pt-1">
-                  {staples.map((s) => (
-                    <span
-                      key={s.key}
-                      className="inline-flex items-center gap-1.5 text-xs bg-slate-100 dark:bg-[#121510] border border-slate-200 dark:border-white/10 text-slate-700 dark:text-slate-200 px-3 py-1.5 rounded-full"
-                    >
-                      {s.display_name}
-                      <button
-                        onClick={async () => {
-                          await apiFetch(`/api/staples/${encodeURIComponent(s.key)}`, {
-                            method: "DELETE",
-                          });
-                          await loadRecipesAndSettings();
-                        }}
-                        className="text-slate-400 hover:text-rose-500"
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              {/* Kedvenc Kifli termékek */}
-              <div className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 space-y-3 shadow-sm dark:shadow-none">
-                <h3 className="font-bold text-base text-slate-900 dark:text-white">
-                  ⭐ Kedvenc Márkák
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  A Kosár fülön bármelyik terméknél rábökhetsz a ⭐ csillagra, és legközelebb mindig azt a márkát választja az AI!
-                </p>
-                {prefs.length === 0 ? (
-                  <p className="text-xs text-slate-500 italic">Még nincs rögzített kedvenc termék.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {prefs.map((p) => (
-                      <div
-                        key={p.ingredient_key}
-                        className="flex items-center justify-between rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/5 px-3.5 py-2.5 text-xs"
-                      >
-                        <div>
-                          <strong className="text-emerald-700 dark:text-emerald-300">
-                            {p.ingredient_label}
-                          </strong>{" "}
-                          → <span className="text-slate-700 dark:text-slate-200">{p.kifli_product_name}</span>
-                        </div>
-                        <button
-                          onClick={async () => {
-                            await apiFetch(`/api/preferences/${encodeURIComponent(p.ingredient_key)}`, {
-                              method: "DELETE",
-                            });
-                            await loadRecipesAndSettings();
-                          }}
-                          className="text-slate-400 hover:text-rose-500 p-1"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* 1. Kártya (Legfelül, teljes szélességű): ⚙️ HETI TERVEZŐ & FŐZÉS BEÁLLÍTÁSOK */}
+              {/* 1. Kártya (Legfelül, teljes szélességű): ⚙️ MENÜTERVEZŐ & BEVÁSÁRLÁS BEÁLLÍTÁSOK */}
               <div className="order-first lg:col-span-3 rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
                 <div>
                   <h2 className="font-extrabold text-lg text-slate-900 dark:text-white">
-                    ⚙️ Menütervező &amp; Bevásárlás Beállítások
+                    ⚙️ Menütervező és bevásárlás beállítások
                   </h2>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    Minden beállítás egy helyen — az AI séf és az összesített bevásárlólista is azonnal ezekhez igazodik.
+                    Minden tervezési beállítás egy helyen — az AI séf és az összesített bevásárlólista azonnal ezekhez igazodik.
                   </p>
                 </div>
 
-                {/* Hány főre · Hány napra · 1 kaja hány napig */}
+                {/* Hány főre · Hány napra · Egy főtt étel hány napra készüljön */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   {/* Hány főre */}
                   <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
                     <div className="flex justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
-                      <span>👥 Hány főre?</span>
+                      <span>👥 Háztartás mérete (fő)</span>
                       <span className="text-emerald-600 dark:text-emerald-400">
                         {plannerSettings.household_size} fő
                       </span>
@@ -2376,7 +3125,7 @@ export default function App() {
                   {/* Hány napra */}
                   <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
                     <div className="flex justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
-                      <span>📅 Hány napra tervezzen?</span>
+                      <span>📅 Tervezett napok száma</span>
                       <span className="text-emerald-600 dark:text-emerald-400">
                         {plannerSettings.plan_days} nap
                       </span>
@@ -2402,17 +3151,17 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* 1 kaja hány napig */}
+                  {/* Egy főtt étel hány napra készüljön */}
                   <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
                     <div className="flex justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
-                      <span>🍲 1 kaja hány napig legyen?</span>
+                      <span>🍲 Egy főtt étel hány napra készüljön?</span>
                       <span className="text-emerald-600 dark:text-emerald-400">
                         {plannerSettings.days_per_meal} nap
                       </span>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
                       {[
-                        { v: 1, l: "1 nap (mindennap új)" },
+                        { v: 1, l: "1 nap (naponta új)" },
                         { v: 2, l: "2 nap" },
                         { v: 3, l: "3 nap" },
                         { v: 4, l: "4 nap" },
@@ -2556,6 +3305,50 @@ export default function App() {
                         );
                       })}
                     </div>
+                  </div>
+                </div>
+
+                {/* 📚 AI Menütervező receptforrásai (Saját / Közösségi / Kifli.hu) */}
+                <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-4 space-y-2.5">
+                  <div>
+                    <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                      📚 Melyik receptforrásokból tervezzen az AI heti menüt?
+                    </div>
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Válaszd ki, hogy az AI új heti menü generáláskor csak a saját receptjeidből, vagy a közösségi nyilvános és a Kifli.hu receptekből is válogasson-e. (Ha egy közösségi vagy Kifli.hu recept megtetszik a Recept válogatásban, ott 1 gombbal a sajátjaid közé is elmentheted!)
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {(
+                      [
+                        { key: "own", label: "🔒 Saját receptjeim" },
+                        { key: "community", label: "🌍 Közösségi nyilvános receptek" },
+                        { key: "kifli", label: "🥑 Kifli.hu receptek" },
+                      ] as const
+                    ).map((src) => {
+                      const currentSources = plannerSettings.recipe_sources || ["own"];
+                      const active = currentSources.includes(src.key);
+                      return (
+                        <button
+                          type="button"
+                          key={src.key}
+                          onClick={() => {
+                            const next = active
+                              ? currentSources.filter((x) => x !== src.key)
+                              : [...currentSources, src.key];
+                            if (next.length === 0) return;
+                            savePlannerSettings({ recipe_sources: next });
+                          }}
+                          className={`px-3.5 py-2 rounded-xl text-xs font-bold border transition ${
+                            active
+                              ? "bg-[#6FA014] text-white border-[#6FA014] shadow-sm"
+                              : "bg-white dark:bg-[#1C2218] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10 hover:border-[#6FA014]/50"
+                          }`}
+                        >
+                          {src.label}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -2804,7 +3597,7 @@ export default function App() {
          ===================================================================== */}
       <nav className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-white/95 dark:bg-[#151912]/95 backdrop-blur-2xl border-t border-slate-200 dark:border-white/10 pb-safe">
         <div className="grid grid-cols-6 px-1 pt-1.5">
-          {navItems.map((item) => {
+          {mobileNavItems.map((item) => {
             const Icon = item.icon;
             const active = activeTab === item.id;
             return (
@@ -3232,6 +4025,26 @@ export default function App() {
               placeholder="Rövid megjegyzés / elkészítés (opcionális)"
               className="w-full bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white rounded-2xl px-3.5 py-2.5 text-xs border border-slate-200 dark:border-white/10"
             />
+
+            {/* Nyilvános / Privát kapcsoló */}
+            <label className="flex items-center justify-between gap-3 rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200 dark:border-white/10 px-3.5 py-2.5 cursor-pointer">
+              <div>
+                <div className="text-xs font-bold text-slate-800 dark:text-white flex items-center gap-1.5">
+                  {recIsPublic ? (
+                    <Globe className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                  ) : (
+                    <Lock className="w-3.5 h-3.5 text-slate-400" />
+                  )}
+                  <span>{recIsPublic ? "Nyilvános recept (látható a közösségi válogatásban)" : "Privát recept (csak te látod)"}</span>
+                </div>
+              </div>
+              <input
+                type="checkbox"
+                checked={recIsPublic}
+                onChange={(e) => setRecIsPublic(e.target.checked)}
+                className="w-4 h-4 accent-[#6FA014]"
+              />
+            </label>
 
             <button
               type="submit"

@@ -34,6 +34,7 @@ from app.config import Settings, load_settings
 from app.db import Database
 from app.demo_sandbox import DemoCartSandbox
 from app.kifli_mcp import KifliMCPManager
+from app.kifli_recipes import import_kifli_recipe_to_db, search_kifli_recipes
 from app.llm_agent import ChefShoppingAgent
 from app.media import save_recipe_image_bytes
 from app.otthon_mcp_server import OptionalPinASGIWrapper, create_otthon_mcp_server
@@ -88,7 +89,26 @@ class RecipeInput(BaseModel):
     protein_g: float | None = None
     carbs_g: float | None = None
     fat_g: float | None = None
+    is_public: bool | None = None
     ingredients: list[IngredientInput] = Field(default_factory=list)
+
+
+class RecipeVisibilityInput(BaseModel):
+    is_public: bool
+
+
+class KifliRecipeImportInput(BaseModel):
+    fallback_title: str = ""
+    fallback_image_url: str = ""
+    fallback_ingredients_preview: str = ""
+
+
+class TinderDaysUpdateInput(BaseModel):
+    target_days: list[str]
+
+
+class HouseholdJoinInput(BaseModel):
+    join_code: str
 
 
 class RecipeImportInput(BaseModel):
@@ -149,6 +169,7 @@ class PlannerSettingsInput(BaseModel):
     ai_recommendations_enabled: bool | None = None
     ai_recommendation_count: int | None = None
     ai_recommendation_meals: list[str] | None = None
+    recipe_sources: list[str] | None = None
 
 
 class TinderSessionCreateInput(BaseModel):
@@ -277,16 +298,22 @@ def create_app(
             path="/",
         )
 
+    def _ws_id(user: dict[str, Any]) -> int:
+        return db.effective_workspace_id(user)
+
     def _public_user_payload(user: dict[str, Any]) -> dict[str, Any]:
         uid = int(user["id"])
-        llm_cfg = agent.resolve_llm_config_for_user(uid)
+        ws_id = _ws_id(user)
+        ws_user = db.get_user_by_id(ws_id) or user
+        llm_cfg = agent.resolve_llm_config_for_user(ws_id)
         raw_user_key = (
-            decrypt_secret(secret_key, user.get("llm_api_key_enc") or "")
-            if user.get("llm_api_key_enc")
+            decrypt_secret(secret_key, ws_user.get("llm_api_key_enc") or "")
+            if ws_user.get("llm_api_key_enc")
             else ""
         )
         return {
             "id": uid,
+            "workspace_user_id": ws_id,
             "email": user["email"],
             "display_name": user["display_name"],
             "is_admin": bool(user.get("is_admin")),
@@ -295,11 +322,11 @@ def create_app(
             "llm": {
                 "provider": llm_cfg["provider"],
                 "model": llm_cfg["model"],
-                "base_url": user.get("llm_base_url") or "",
+                "base_url": ws_user.get("llm_base_url") or "",
                 "using_own_key": llm_cfg["using_own_key"],
                 "masked_api_key": mask_api_key(raw_user_key),
                 "daily_limit": llm_cfg["daily_limit"],
-                "daily_used": db.get_daily_ai_usage(uid),
+                "daily_used": db.get_daily_ai_usage(ws_id),
             },
         }
 
@@ -550,7 +577,7 @@ def create_app(
         payload: UserLLMSettingsInput,
         user: dict[str, Any] = Depends(get_current_user),
     ) -> dict[str, Any]:
-        uid = int(user["id"])
+        ws_id = _ws_id(user)
         enc_key: str | None = None
         if payload.llm_api_key is not None:
             enc_key = (
@@ -558,14 +585,70 @@ def create_app(
                 if payload.llm_api_key.strip()
                 else ""
             )
-        updated = db.update_user_llm_settings(
-            user_id=uid,
+        db.update_user_llm_settings(
+            user_id=ws_id,
             llm_provider=payload.llm_provider,
             llm_model=payload.llm_model,
             llm_base_url=payload.llm_base_url,
             llm_api_key_enc=enc_key,
         )
-        return _public_user_payload(updated)
+        fresh_me = db.get_user_by_id(int(user["id"])) or user
+        return _public_user_payload(fresh_me)
+
+    # --- 🏠 Családi / Háztartási Fiók Összekapcsolás ---
+    @app.get("/api/household")
+    async def get_household_api(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+        if user.get("is_demo"):
+            return {
+                "workspace_user_id": int(user["id"]),
+                "is_owner": True,
+                "owner_name": user["display_name"],
+                "join_code": "DEMO99",
+                "members": [
+                    {
+                        "id": int(user["id"]),
+                        "email": user["email"],
+                        "display_name": user["display_name"],
+                        "is_owner": True,
+                        "is_me": True,
+                    }
+                ],
+            }
+        return db.get_household_info(int(user["id"]))
+
+    @app.post("/api/household/join")
+    async def join_household_api(
+        payload: HouseholdJoinInput, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
+        try:
+            return db.join_household_by_code(int(user["id"]), payload.join_code)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/household/leave")
+    async def leave_household_api(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+        try:
+            return db.leave_or_remove_from_household(int(user["id"]))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/api/household/members/{member_id}")
+    async def remove_household_member_api(
+        member_id: int, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
+        try:
+            return db.leave_or_remove_from_household(int(user["id"]), target_member_id=member_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/household/rotate-code")
+    async def rotate_household_code_api(
+        user: dict[str, Any] = Depends(get_current_user),
+    ) -> dict[str, Any]:
+        try:
+            return db.rotate_household_join_code(int(user["id"]))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/auth/mcp-token/rotate")
     async def rotate_my_mcp_token(
@@ -577,7 +660,7 @@ def create_app(
     # --- Status ---
     @app.get("/api/status")
     async def status(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-        uid = int(user["id"])
+        uid = _ws_id(user)
         is_demo = bool(user.get("is_demo"))
         llm_cfg = agent.resolve_llm_config_for_user(uid)
         kifli_status = (
@@ -613,7 +696,7 @@ def create_app(
     async def get_recipes(
         category: str | None = None, user: dict[str, Any] = Depends(get_current_user)
     ) -> list[dict[str, Any]]:
-        return db.list_recipes(category=category, user_id=int(user["id"]))
+        return db.list_recipes(category=category, user_id=_ws_id(user))
 
     @app.post("/api/recipes")
     async def create_recipe(
@@ -631,8 +714,9 @@ def create_app(
             protein_g=payload.protein_g,
             carbs_g=payload.carbs_g,
             fat_g=payload.fat_g,
+            is_public=payload.is_public,
             ingredients=[i.model_dump() for i in payload.ingredients],
-            user_id=int(user["id"]),
+            user_id=_ws_id(user),
         )
 
     @app.put("/api/recipes/{recipe_id}")
@@ -653,18 +737,92 @@ def create_app(
                 protein_g=payload.protein_g,
                 carbs_g=payload.carbs_g,
                 fat_g=payload.fat_g,
+                is_public=payload.is_public,
                 ingredients=[i.model_dump() for i in payload.ingredients],
-                user_id=int(user["id"]),
+                user_id=_ws_id(user),
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/recipes/{recipe_id}/visibility")
+    async def set_recipe_visibility_api(
+        recipe_id: int,
+        payload: RecipeVisibilityInput,
+        user: dict[str, Any] = Depends(get_current_user),
+    ) -> dict[str, Any]:
+        try:
+            return db.set_recipe_visibility(
+                recipe_id=recipe_id, is_public=payload.is_public, user_id=_ws_id(user)
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    # --- 🌍 Közösségi Recept Válogatás + Kifli.hu Recept Szinkron ---
+    @app.get("/api/community/recipes")
+    async def list_community_recipes_api(
+        category: str | None = None,
+        search: str = "",
+        user: dict[str, Any] = Depends(get_current_user),
+    ) -> list[dict[str, Any]]:
+        return db.list_community_recipes(
+            category=category or None, search=search, current_user_id=_ws_id(user)
+        )
+
+    @app.post("/api/community/recipes/{recipe_id}/copy")
+    async def copy_community_recipe_api(
+        recipe_id: int, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
+        try:
+            return db.copy_public_recipe_to_user(
+                source_recipe_id=recipe_id, target_user_id=_ws_id(user)
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/api/kifli/recipes")
+    async def search_kifli_recipes_api(
+        query: str = "",
+        limit: int = 9,
+        user: dict[str, Any] = Depends(get_current_user),
+    ) -> dict[str, Any]:
+        uid = _ws_id(user)
+        is_demo = bool(user.get("is_demo"))
+        return await search_kifli_recipes(
+            kifli=None if is_demo else get_kifli_for_user(uid),
+            query=query,
+            limit=limit,
+            is_demo=is_demo,
+        )
+
+    @app.post("/api/kifli/recipes/{kifli_recipe_id}/import")
+    async def import_kifli_recipe_api(
+        kifli_recipe_id: int,
+        payload: KifliRecipeImportInput | None = None,
+        user: dict[str, Any] = Depends(get_current_user),
+    ) -> dict[str, Any]:
+        uid = _ws_id(user)
+        is_demo = bool(user.get("is_demo"))
+        p = payload or KifliRecipeImportInput()
+        try:
+            return await import_kifli_recipe_to_db(
+                db=db,
+                kifli=None if is_demo else get_kifli_for_user(uid),
+                kifli_recipe_id=kifli_recipe_id,
+                user_id=uid,
+                is_demo=is_demo,
+                fallback_title=p.fallback_title,
+                fallback_image_url=p.fallback_image_url,
+                fallback_ingredients_preview=p.fallback_ingredients_preview,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/recipes/{recipe_id}/estimate-macros")
     async def estimate_recipe_macros_api(
         recipe_id: int, user: dict[str, Any] = Depends(get_current_user)
     ) -> dict[str, Any]:
         try:
-            return await agent.estimate_recipe_macros(recipe_id=recipe_id, user_id=int(user["id"]))
+            return await agent.estimate_recipe_macros(recipe_id=recipe_id, user_id=_ws_id(user))
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -682,7 +840,7 @@ def create_app(
                 mime_type=file.content_type or "",
                 filename=file.filename or "",
             )
-            return db.set_recipe_image(recipe_id, saved_url, user_id=int(user["id"]))
+            return db.set_recipe_image(recipe_id, saved_url, user_id=_ws_id(user))
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -691,7 +849,7 @@ def create_app(
         recipe_id: int, user: dict[str, Any] = Depends(get_current_user)
     ) -> dict[str, Any]:
         try:
-            return db.set_recipe_image(recipe_id, "", user_id=int(user["id"]))
+            return db.set_recipe_image(recipe_id, "", user_id=_ws_id(user))
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -699,7 +857,7 @@ def create_app(
     async def remove_recipe(
         recipe_id: int, user: dict[str, Any] = Depends(get_current_user)
     ) -> dict[str, Any]:
-        return {"deleted": db.delete_recipe(recipe_id, user_id=int(user["id"]))}
+        return {"deleted": db.delete_recipe(recipe_id, user_id=_ws_id(user))}
 
     @app.post("/api/recipes/import")
     async def import_recipe(
@@ -707,7 +865,7 @@ def create_app(
     ) -> dict[str, Any]:
         try:
             return await agent.parse_recipe_from_text_or_url(
-                payload.text_or_url, user_id=int(user["id"])
+                payload.text_or_url, user_id=_ws_id(user)
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -717,7 +875,7 @@ def create_app(
     async def get_general_items(
         include_ordered: bool = False, user: dict[str, Any] = Depends(get_current_user)
     ) -> list[dict[str, Any]]:
-        return db.list_general_items(include_ordered=include_ordered, user_id=int(user["id"]))
+        return db.list_general_items(include_ordered=include_ordered, user_id=_ws_id(user))
 
     @app.post("/api/general-items")
     async def post_general_item(
@@ -728,31 +886,31 @@ def create_app(
             quantity=payload.quantity,
             unit=payload.unit,
             brand_hint=payload.brand_hint,
-            user_id=int(user["id"]),
+            user_id=_ws_id(user),
         )
 
     @app.delete("/api/general-items/{item_id}")
     async def remove_general_item(
         item_id: int, user: dict[str, Any] = Depends(get_current_user)
     ) -> dict[str, Any]:
-        return {"deleted": db.delete_general_item(item_id, user_id=int(user["id"]))}
+        return {"deleted": db.delete_general_item(item_id, user_id=_ws_id(user))}
 
     @app.post("/api/general-items/confirm-order")
     async def confirm_order(
         payload: ConfirmOrderInput, user: dict[str, Any] = Depends(get_current_user)
     ) -> dict[str, Any]:
         return db.finalize_order_and_clear_general_items(
-            include_pending_if_forced=payload.include_pending, user_id=int(user["id"])
+            include_pending_if_forced=payload.include_pending, user_id=_ws_id(user)
         )
 
     @app.post("/api/general-items/revert-cart")
     async def revert_cart_items(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-        return {"reverted": db.revert_in_cart_general_items_to_pending(user_id=int(user["id"]))}
+        return {"reverted": db.revert_in_cart_general_items_to_pending(user_id=_ws_id(user))}
 
     # --- Heti Menü & Összesített Bevásárlólista ---
     @app.get("/api/weekly-plan")
     async def get_weekly_plan(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-        uid = int(user["id"])
+        uid = _ws_id(user)
         return {
             "plan": db.get_weekly_plan(user_id=uid),
             "aggregated_shopping": db.aggregate_shopping_list(user_id=uid),
@@ -762,7 +920,7 @@ def create_app(
     async def manual_swap_weekly_slot(
         payload: ManualSlotSwapInput, user: dict[str, Any] = Depends(get_current_user)
     ) -> dict[str, Any]:
-        uid = int(user["id"])
+        uid = _ws_id(user)
         try:
             updated_plan = db.set_weekly_meal_slots_manual(
                 day_keys=payload.days,
@@ -781,7 +939,7 @@ def create_app(
 
     @app.post("/api/weekly-plan/reset")
     async def reset_weekly_plan(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-        uid = int(user["id"])
+        uid = _ws_id(user)
         return {
             "plan": db.reset_weekly_plan(user_id=uid),
             "aggregated_shopping": db.aggregate_shopping_list(user_id=uid),
@@ -791,7 +949,7 @@ def create_app(
     async def trigger_weekly_plan_generation(
         user: dict[str, Any] = Depends(get_current_user),
     ) -> dict[str, Any]:
-        uid = int(user["id"])
+        uid = _ws_id(user)
         is_demo = bool(user.get("is_demo"))
         try:
             proposal_text = await agent.generate_monday_weekly_proposal(
@@ -812,13 +970,13 @@ def create_app(
     async def get_chat_messages(
         user: dict[str, Any] = Depends(get_current_user),
     ) -> list[dict[str, Any]]:
-        return db.get_recent_chat_messages(limit=30, user_id=int(user["id"]))
+        return db.get_recent_chat_messages(limit=30, user_id=_ws_id(user))
 
     @app.post("/api/chat")
     async def send_chat_message(
         payload: ChatInput, user: dict[str, Any] = Depends(get_current_user)
     ) -> dict[str, Any]:
-        uid = int(user["id"])
+        uid = _ws_id(user)
         is_demo = bool(user.get("is_demo"))
         try:
             reply = await agent.chat(
@@ -838,19 +996,19 @@ def create_app(
 
     @app.delete("/api/chat")
     async def reset_chat(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
-        db.clear_chat_history(user_id=int(user["id"]))
+        db.clear_chat_history(user_id=_ws_id(user))
         return {"cleared": True}
 
     # --- Kamra & Kedvenc Kifli termékek ---
     @app.get("/api/staples")
     async def get_staples(user: dict[str, Any] = Depends(get_current_user)) -> list[dict[str, str]]:
-        return db.list_staples(user_id=int(user["id"]))
+        return db.list_staples(user_id=_ws_id(user))
 
     @app.post("/api/staples")
     async def create_staple(
         payload: StapleInput, user: dict[str, Any] = Depends(get_current_user)
     ) -> list[dict[str, str]]:
-        uid = int(user["id"])
+        uid = _ws_id(user)
         db.add_staple(payload.name, user_id=uid)
         return db.list_staples(user_id=uid)
 
@@ -858,13 +1016,13 @@ def create_app(
     async def remove_staple(
         key: str, user: dict[str, Any] = Depends(get_current_user)
     ) -> dict[str, Any]:
-        return {"deleted": db.delete_staple(key, user_id=int(user["id"]))}
+        return {"deleted": db.delete_staple(key, user_id=_ws_id(user))}
 
     @app.get("/api/preferences")
     async def get_preferences(
         user: dict[str, Any] = Depends(get_current_user),
     ) -> list[dict[str, Any]]:
-        return db.list_product_preferences(user_id=int(user["id"]))
+        return db.list_product_preferences(user_id=_ws_id(user))
 
     @app.post("/api/preferences")
     async def create_preference(
@@ -874,14 +1032,14 @@ def create_app(
             ingredient_name=payload.ingredient_name,
             kifli_product_id=payload.kifli_product_id,
             kifli_product_name=payload.kifli_product_name,
-            user_id=int(user["id"]),
+            user_id=_ws_id(user),
         )
 
     @app.delete("/api/preferences/{key}")
     async def remove_preference(
         key: str, user: dict[str, Any] = Depends(get_current_user)
     ) -> dict[str, Any]:
-        return {"deleted": db.delete_product_preference(key, user_id=int(user["id"]))}
+        return {"deleted": db.delete_product_preference(key, user_id=_ws_id(user))}
 
     # --- Kifli.hu OAuth 2.1 MCP (Per-User + Demo Sandbox!) ---
     @app.post("/api/kifli/login")
@@ -892,7 +1050,7 @@ def create_app(
                 detail="Demo módban szimulált Kifli kosár fut. Saját Kifli fiók összekötéséhez regisztrálj saját fiókot!",
             )
         try:
-            url = await get_kifli_for_user(int(user["id"])).start_login_flow()
+            url = await get_kifli_for_user(_ws_id(user)).start_login_flow()
             return {"login_url": url}
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -902,7 +1060,7 @@ def create_app(
         payload: KifliCallbackInput, user: dict[str, Any] = Depends(get_current_user)
     ) -> dict[str, Any]:
         try:
-            return await get_kifli_for_user(int(user["id"])).submit_callback_url(
+            return await get_kifli_for_user(_ws_id(user)).submit_callback_url(
                 payload.callback_url
             )
         except Exception as exc:
@@ -912,7 +1070,7 @@ def create_app(
     async def logout_kifli(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
         if user.get("is_demo"):
             return {"authenticated": True, "is_demo_sandbox": True}
-        km = get_kifli_for_user(int(user["id"]))
+        km = get_kifli_for_user(_ws_id(user))
         await km.logout()
         return await km.get_status()
 
@@ -923,7 +1081,7 @@ def create_app(
         if user.get("is_demo"):
             return []
         try:
-            return await get_kifli_for_user(int(user["id"])).list_tools(force_refresh=True)
+            return await get_kifli_for_user(_ws_id(user)).list_tools(force_refresh=True)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -978,7 +1136,7 @@ def create_app(
     async def _fetch_user_cart(user: dict[str, Any]) -> dict[str, Any]:
         if user.get("is_demo"):
             return demo_sandbox.get_cart()
-        km = get_kifli_for_user(int(user["id"]))
+        km = get_kifli_for_user(_ws_id(user))
         st = await km.get_status()
         if not st["authenticated"]:
             return {
@@ -1008,7 +1166,7 @@ def create_app(
     ) -> dict[str, Any]:
         if user.get("is_demo"):
             return demo_sandbox.update_item(payload.product_id, payload.quantity)
-        km = get_kifli_for_user(int(user["id"]))
+        km = get_kifli_for_user(_ws_id(user))
         try:
             if payload.quantity <= 0:
                 await km.call_tool_untruncated(
@@ -1034,7 +1192,7 @@ def create_app(
     ) -> dict[str, Any]:
         if user.get("is_demo"):
             return demo_sandbox.clear()
-        km = get_kifli_for_user(int(user["id"]))
+        km = get_kifli_for_user(_ws_id(user))
         try:
             await km.call_tool_untruncated(
                 "clear_cart", {"context": "User requested clearing the shopping cart"}
@@ -1053,7 +1211,7 @@ def create_app(
     async def optimize_cart_private_label(
         user: dict[str, Any] = Depends(get_current_user),
     ) -> dict[str, Any]:
-        uid = int(user["id"])
+        uid = _ws_id(user)
         if user.get("is_demo"):
             return demo_sandbox.optimize_private_label(db=db, user_id=uid)
         km = get_kifli_for_user(uid)
@@ -1079,7 +1237,7 @@ def create_app(
     ) -> dict[str, Any]:
         if user.get("is_demo"):
             return demo_sandbox.apply_swaps([s.model_dump() for s in payload.swaps])
-        km = get_kifli_for_user(int(user["id"]))
+        km = get_kifli_for_user(_ws_id(user))
         try:
             applied = await execute_cart_swaps(km, [s.model_dump() for s in payload.swaps])
             fresh_cart = await _fetch_user_cart(user)
@@ -1092,14 +1250,14 @@ def create_app(
     async def get_planner_settings_api(
         user: dict[str, Any] = Depends(get_current_user),
     ) -> dict[str, Any]:
-        return db.get_planner_settings(user_id=int(user["id"]))
+        return db.get_planner_settings(user_id=_ws_id(user))
 
     @app.put("/api/planner-settings")
     async def update_planner_settings_api(
         payload: PlannerSettingsInput, user: dict[str, Any] = Depends(get_current_user)
     ) -> dict[str, Any]:
         return db.update_planner_settings(
-            payload.model_dump(exclude_none=True), user_id=int(user["id"])
+            payload.model_dump(exclude_none=True), user_id=_ws_id(user)
         )
 
     # --- 🧠 Smart Restock ---
@@ -1107,7 +1265,7 @@ def create_app(
     async def get_smart_restock_api(
         user: dict[str, Any] = Depends(get_current_user),
     ) -> dict[str, Any]:
-        uid = int(user["id"])
+        uid = _ws_id(user)
         if user.get("is_demo"):
             return {
                 "kifli_connected": True,
@@ -1152,7 +1310,7 @@ def create_app(
         return db.create_tinder_session(
             meal_type=payload.meal_type,
             target_days=payload.target_days,
-            owner_user_id=int(user["id"]),
+            owner_user_id=_ws_id(user),
         )
 
     @app.get("/api/tinder/sessions/{code}")
@@ -1180,6 +1338,17 @@ def create_app(
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+    @app.put("/api/tinder/sessions/{code}/days")
+    async def update_tinder_days_api(
+        code: str,
+        payload: TinderDaysUpdateInput,
+        _user: dict[str, Any] = Depends(get_current_user),
+    ) -> dict[str, Any]:
+        try:
+            return db.update_tinder_session_days(code, payload.target_days)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     @app.post("/api/tinder/sessions/{code}/accept")
     async def accept_tinder_match_api(
         code: str,
@@ -1187,32 +1356,13 @@ def create_app(
         user: dict[str, Any] = Depends(get_current_user),
     ) -> dict[str, Any]:
         try:
-            sess = db.get_tinder_session(code)
-            owner_uid = int(sess["owner_user_id"])
-            updated_owner_plan = db.set_weekly_meal_slots_manual(
-                day_keys=payload.days,
-                meal_type=payload.meal_type,
+            return db.accept_tinder_match(
+                code=code,
                 recipe_id=payload.recipe_id,
-                user_id=owner_uid,
+                meal_type=payload.meal_type,
+                requested_days=payload.days,
+                actor_user_id=_ws_id(user),
             )
-            # Ha a 2. fő másik fiókkal van belépve, az ő menüjébe is tegyük be a közös étel nevét
-            caller_uid = int(user["id"])
-            if caller_uid != owner_uid:
-                rec = next(
-                    (r for r in sess.get("deck_recipes", []) if r["id"] == int(payload.recipe_id)),
-                    None,
-                )
-                if rec:
-                    db.set_weekly_meal_slots_manual(
-                        day_keys=payload.days,
-                        meal_type=payload.meal_type,
-                        custom_title=rec["title"],
-                        user_id=caller_uid,
-                    )
-            return {
-                "plan": updated_owner_plan,
-                "aggregated_shopping": db.aggregate_shopping_list(user_id=owner_uid),
-            }
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
