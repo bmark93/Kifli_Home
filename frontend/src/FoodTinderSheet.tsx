@@ -135,6 +135,25 @@ export function FoodTinderSheet({
     });
   }
 
+  function advanceSelectedDays(currentDays: string[]): string[] {
+    const indices = currentDays
+      .map((dk) => DAYS_LIST.findIndex((d) => d.key === dk))
+      .filter((i) => i >= 0);
+    if (!indices.length) return [DAYS_LIST[0].key];
+
+    const span = currentDays.length;
+    const maxIdx = Math.max(...indices);
+    const nextStart = (maxIdx + 1) % DAYS_LIST.length;
+
+    const nextDays: string[] = [];
+    for (let offset = 0; offset < span; offset++) {
+      const idx = nextStart + offset;
+      if (idx >= DAYS_LIST.length) break;
+      nextDays.push(DAYS_LIST[idx].key);
+    }
+    return nextDays.length ? nextDays : [DAYS_LIST[0].key];
+  }
+
   async function createCoupleRoom() {
     setCoupleError("");
     try {
@@ -201,7 +220,12 @@ export function FoodTinderSheet({
         const dayNames = selectedDays
           .map((dk) => DAYS_LIST.find((d) => d.key === dk)?.short || dk)
           .join("+");
-        setLastPicked(`✅ ${current.title} → ${dayNames}`);
+        const nextDays = advanceSelectedDays(selectedDays);
+        setSelectedDays(nextDays);
+        const nextLabel = nextDays
+          .map((dk) => DAYS_LIST.find((d) => d.key === dk)?.label || dk)
+          .join(" + ");
+        setLastPicked(`✅ ${current.title} → ${dayNames} · Következő: ${nextLabel}`);
       } finally {
         setSaving(false);
       }
@@ -291,14 +315,23 @@ export function FoodTinderSheet({
               <button
                 type="button"
                 onClick={async () => {
-                  const targetD = coupleSession?.target_days?.length
+                  const targetD = selectedDays.length
+                    ? selectedDays
+                    : coupleSession?.target_days?.length
                     ? coupleSession.target_days
-                    : selectedDays;
+                    : [initialDay];
                   await onAcceptRecipe(targetD, mealType, celebrateMatch);
                   const dayNames = targetD
                     .map((dk) => DAYS_LIST.find((d) => d.key === dk)?.short || dk)
                     .join("+");
-                  setLastPicked(`💚 MATCH mentve: ${celebrateMatch.title} → ${dayNames}`);
+                  const nextDays = advanceSelectedDays(targetD);
+                  setSelectedDays(nextDays);
+                  const nextLabel = nextDays
+                    .map((dk) => DAYS_LIST.find((d) => d.key === dk)?.label || dk)
+                    .join(" + ");
+                  setLastPicked(
+                    `💚 MATCH mentve: ${celebrateMatch.title} → ${dayNames} · Következő: ${nextLabel}`
+                  );
                   setCelebrateMatch(null);
                 }}
                 className="w-full py-3.5 rounded-2xl bg-white text-emerald-950 font-black text-sm shadow-xl"
