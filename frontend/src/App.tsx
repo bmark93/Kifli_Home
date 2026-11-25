@@ -119,9 +119,9 @@ export default function App() {
     typeof window !== "undefined" ? window.innerWidth >= 1024 : false
   );
   const [theme, setTheme] = useState<"dark" | "light">(() => {
-    if (typeof window === "undefined") return "dark";
+    if (typeof window === "undefined") return "light";
     const saved = localStorage.getItem("kifli_theme");
-    return saved === "light" ? "light" : "dark";
+    return saved === "dark" ? "dark" : "light";
   });
   const [swapTarget, setSwapTarget] = useState<{
     day: string;
@@ -135,7 +135,7 @@ export default function App() {
       localStorage.setItem("kifli_theme", next);
       document.documentElement.classList.toggle("dark", next === "dark");
       const meta = document.getElementById("meta-theme-color");
-      if (meta) meta.setAttribute("content", next === "dark" ? "#090d16" : "#f8fafc");
+      if (meta) meta.setAttribute("content", next === "dark" ? "#121510" : "#6FA014");
       return next;
     });
   }
@@ -629,7 +629,7 @@ export default function App() {
   ];
 
   return (
-    <div className="min-h-[100dvh] bg-slate-50 text-slate-900 dark:bg-[#090d16] dark:text-slate-100 flex flex-col lg:flex-row transition-colors duration-200">
+    <div className="min-h-[100dvh] bg-[#F6F6F2] text-[#1F241E] dark:bg-[#121510] dark:text-slate-100 flex flex-col lg:flex-row transition-colors duration-200">
       {/* TOAST ÉRTESÍTŐ */}
       {toast && (
         <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 px-4 w-full max-w-md pointer-events-none">
@@ -647,17 +647,19 @@ export default function App() {
       )}
 
       {/* DESKTOP SIDEBAR */}
-      <aside className="hidden lg:flex lg:w-64 xl:w-68 lg:flex-col lg:fixed lg:inset-y-0 bg-white dark:bg-[#0e1525] border-r border-slate-200/80 dark:border-white/5 p-5 shadow-sm dark:shadow-none z-30">
+      <aside className="hidden lg:flex lg:w-64 xl:w-68 lg:flex-col lg:fixed lg:inset-y-0 bg-white dark:bg-[#171C14] border-r border-slate-200/80 dark:border-white/5 p-5 shadow-sm dark:shadow-none z-30">
         <div className="flex items-center justify-between gap-2 mb-7">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white dark:text-slate-950 font-black shadow-lg shadow-emerald-500/25">
-              <ChefHat className="w-6 h-6" />
+            <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-[#7AB116] to-[#56800C] flex items-center justify-center text-2xl shadow-lg shadow-[#6FA014]/30 ring-2 ring-amber-400/40">
+              🥐
             </div>
             <div>
-              <div className="font-bold tracking-tight text-slate-900 dark:text-white leading-none">
-                Kifli Otthon
+              <div className="font-extrabold tracking-tight text-slate-900 dark:text-white leading-none text-[17px]">
+                kifli<span className="text-[#6FA014] dark:text-[#8CC61F]">.otthon</span>
               </div>
-              <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">Privát Séf &amp; MCP</div>
+              <div className="text-[11px] font-semibold text-amber-600 dark:text-amber-400 mt-1">
+                Xtra Menü &amp; MCP Séf
+              </div>
             </div>
           </div>
 
@@ -723,16 +725,16 @@ export default function App() {
       </aside>
 
       {/* MOBIL TOP HEADER */}
-      <header className="lg:hidden sticky top-0 z-30 bg-white/90 dark:bg-[#090d16]/85 backdrop-blur-xl border-b border-slate-200/80 dark:border-white/5 px-4 py-3 flex items-center justify-between">
+      <header className="lg:hidden sticky top-0 z-30 bg-white/95 dark:bg-[#171C14]/90 backdrop-blur-xl border-b border-slate-200/80 dark:border-white/5 px-4 py-3 flex items-center justify-between shadow-xs dark:shadow-none">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white dark:text-slate-950 shadow-md shadow-emerald-500/20">
-            <ChefHat className="w-4 h-4" />
+          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[#7AB116] to-[#56800C] flex items-center justify-center text-lg shadow-md shadow-[#6FA014]/25 ring-2 ring-amber-400/35">
+            🥐
           </div>
           <div>
-            <h1 className="text-[15px] font-bold tracking-tight leading-none text-slate-900 dark:text-white">
-              Kifli Otthon
+            <h1 className="text-[16px] font-extrabold tracking-tight leading-none text-slate-900 dark:text-white">
+              kifli<span className="text-[#6FA014] dark:text-[#8CC61F]">.otthon</span>
             </h1>
-            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+            <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 font-medium">
               {cart && cart.total_price > 0
                 ? `Kosár: ${formatFt(cart.total_price)}`
                 : "Heti Menü & Bevásárlás"}
@@ -771,7 +773,7 @@ export default function App() {
           {activeTab === "menu" && (
             <div className="space-y-5">
               {/* Hero Action Card */}
-              <div className="rounded-3xl bg-gradient-to-br from-emerald-600 via-teal-700 to-slate-900 dark:from-emerald-950/85 dark:via-[#111c30] dark:to-[#0e1525] border border-emerald-500/25 p-5 sm:p-6 shadow-lg text-white">
+              <div className="rounded-3xl bg-gradient-to-br from-[#6FA014] via-[#5C870E] to-[#3F620A] dark:from-[#365314] dark:via-[#263B0F] dark:to-[#182210] border border-emerald-500/25 p-5 sm:p-6 shadow-lg text-white">
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                   <div>
                     <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-100 dark:text-emerald-300 bg-white/15 dark:bg-emerald-500/10 border border-white/20 dark:border-emerald-500/20 px-2.5 py-1 rounded-full mb-2">
@@ -855,13 +857,13 @@ export default function App() {
                             className={`relative shrink-0 px-3.5 py-2 rounded-2xl text-xs font-bold transition ${
                               isSelected
                                 ? "bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950 shadow-md shadow-emerald-500/20"
-                                : "bg-white dark:bg-[#131c2e] text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-white/5 hover:bg-slate-100 dark:hover:bg-white/10"
+                                : "bg-white dark:bg-[#1F261A] text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-white/5 hover:bg-slate-100 dark:hover:bg-white/10"
                             }`}
                           >
                             <span className="sm:hidden">{d.short}</span>
                             <span className="hidden sm:inline">{d.label}</span>
                             {hasReco && (
-                              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-amber-400 ring-2 ring-slate-50 dark:ring-[#090d16]" />
+                              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-amber-400 ring-2 ring-slate-50 dark:ring-[#121510]" />
                             )}
                           </button>
                         );
@@ -873,7 +875,7 @@ export default function App() {
                       className={`shrink-0 px-3.5 py-2 rounded-2xl text-xs font-semibold border transition ${
                         showAllDays
                           ? "bg-slate-900 text-white border-slate-900 dark:bg-white/15 dark:border-white/25 dark:text-white"
-                          : "bg-white dark:bg-[#131c2e] border-slate-200 dark:border-white/5 text-slate-600 dark:text-slate-400"
+                          : "bg-white dark:bg-[#1F261A] border-slate-200 dark:border-white/5 text-slate-600 dark:text-slate-400"
                       }`}
                     >
                       {showAllDays ? "Napi fókusz" : "Mind a 7 nap"}
@@ -921,7 +923,7 @@ export default function App() {
                         return (
                           <div
                             key={dayObj.key}
-                            className={`rounded-3xl bg-white dark:bg-[#11192a] border p-4 sm:p-5 space-y-3 shadow-sm dark:shadow-none ${
+                            className={`rounded-3xl bg-white dark:bg-[#1C2218] border p-4 sm:p-5 space-y-3 shadow-sm dark:shadow-none ${
                               isToday
                                 ? "border-emerald-500/40 ring-1 ring-emerald-500/20"
                                 : "border-slate-200/80 dark:border-white/5"
@@ -964,7 +966,7 @@ export default function App() {
                                         currentTitle: slot?.title,
                                       })
                                     }
-                                    className="w-full text-left group rounded-2xl bg-slate-50 hover:bg-emerald-50/70 dark:bg-[#0b101d] dark:hover:bg-white/[0.04] border border-slate-200/80 hover:border-emerald-500/40 dark:border-white/5 p-3.5 flex flex-col justify-between transition cursor-pointer"
+                                    className="w-full text-left group rounded-2xl bg-slate-50 hover:bg-emerald-50/70 dark:bg-[#151912] dark:hover:bg-white/[0.04] border border-slate-200/80 hover:border-emerald-500/40 dark:border-white/5 p-3.5 flex flex-col justify-between transition cursor-pointer"
                                   >
                                     <div className="flex items-center justify-between gap-2 mb-1.5 w-full">
                                       <span
@@ -1003,7 +1005,7 @@ export default function App() {
                 </div>
 
                 {/* JOBB STICKY HASÁB (4-3 oszlop): Élő Összesített Bevásárlólista */}
-                <div className="xl:col-span-4 2xl:col-span-3 xl:sticky xl:top-6 rounded-3xl bg-white dark:bg-[#11192a] border border-slate-200/80 dark:border-white/5 p-4 sm:p-5 space-y-4 shadow-sm dark:shadow-none">
+                <div className="xl:col-span-4 2xl:col-span-3 xl:sticky xl:top-6 rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-4 sm:p-5 space-y-4 shadow-sm dark:shadow-none">
                   <div className="flex items-center justify-between">
                     <div>
                       <h3 className="font-bold text-base text-slate-900 dark:text-white">
@@ -1025,7 +1027,7 @@ export default function App() {
                       {weekly.aggregated_shopping.recipe_and_adhoc_items.map((it, idx) => (
                         <div
                           key={idx}
-                          className="flex items-center justify-between rounded-xl bg-slate-50 dark:bg-[#0b101d] border border-slate-200/70 dark:border-white/5 px-3 py-2 text-xs sm:text-sm"
+                          className="flex items-center justify-between rounded-xl bg-slate-50 dark:bg-[#151912] border border-slate-200/70 dark:border-white/5 px-3 py-2 text-xs sm:text-sm"
                         >
                           <span className="text-slate-700 dark:text-slate-200 truncate pr-2">
                             {it.name}
@@ -1078,8 +1080,8 @@ export default function App() {
              ================================================================= */}
           {activeTab === "chat" && (
             <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
-              <div className="xl:col-span-8 flex flex-col h-[calc(100dvh-9.5rem)] lg:h-[calc(100dvh-4rem)] rounded-3xl bg-white dark:bg-[#11192a] border border-slate-200/80 dark:border-white/5 shadow-sm dark:shadow-none overflow-hidden">
-                <div className="px-4 py-3 border-b border-slate-200 dark:border-white/5 flex items-center justify-between bg-slate-50 dark:bg-[#141e33]">
+              <div className="xl:col-span-8 flex flex-col h-[calc(100dvh-9.5rem)] lg:h-[calc(100dvh-4rem)] rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 shadow-sm dark:shadow-none overflow-hidden">
+                <div className="px-4 py-3 border-b border-slate-200 dark:border-white/5 flex items-center justify-between bg-slate-50 dark:bg-[#20271C]">
                   <div className="flex items-center gap-2.5">
                     <Sparkles className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                     <span className="font-bold text-sm text-slate-900 dark:text-white">
@@ -1099,7 +1101,7 @@ export default function App() {
                 </div>
 
                 {/* Gyors-prompt chipek */}
-                <div className="px-3 py-2 border-b border-slate-200 dark:border-white/5 flex gap-2 overflow-x-auto no-scrollbar bg-slate-100/70 dark:bg-[#0d1424]">
+                <div className="px-3 py-2 border-b border-slate-200 dark:border-white/5 flex gap-2 overflow-x-auto no-scrollbar bg-slate-100/70 dark:bg-[#151912]">
                   {[
                     "Kedd ebéd legyen inkább krumplifőzelék",
                     "Adj még hozzá 2 liter tejet a héthez",
@@ -1140,7 +1142,7 @@ export default function App() {
                         className={`max-w-[88%] sm:max-w-[78%] rounded-2xl px-4 py-3 shadow-sm ${
                           m.role === "user"
                             ? "bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950 font-medium rounded-br-sm"
-                            : "bg-slate-100 text-slate-800 dark:bg-[#1a253d] dark:text-slate-100 border border-slate-200/70 dark:border-white/5 rounded-bl-sm"
+                            : "bg-slate-100 text-slate-800 dark:bg-[#263020] dark:text-slate-100 border border-slate-200/70 dark:border-white/5 rounded-bl-sm"
                         }`}
                       >
                         {m.role === "user" ? (
@@ -1154,7 +1156,7 @@ export default function App() {
 
                   {busyAction === "chat" && (
                     <div className="flex justify-start">
-                      <div className="bg-slate-100 dark:bg-[#1a253d] border border-slate-200 dark:border-white/5 rounded-2xl rounded-bl-sm px-4 py-3 text-xs text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
+                      <div className="bg-slate-100 dark:bg-[#263020] border border-slate-200 dark:border-white/5 rounded-2xl rounded-bl-sm px-4 py-3 text-xs text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
                         <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                         A séf dolgozik (Kifli MCP / receptek egyeztetése)...
                       </div>
@@ -1169,14 +1171,14 @@ export default function App() {
                     e.preventDefault();
                     handleSendChat();
                   }}
-                  className="p-3 bg-slate-50 dark:bg-[#141e33] border-t border-slate-200 dark:border-white/5 flex items-center gap-2"
+                  className="p-3 bg-slate-50 dark:bg-[#20271C] border-t border-slate-200 dark:border-white/5 flex items-center gap-2"
                 >
                   <input
                     type="text"
                     value={chatInput}
                     onChange={(e) => setChatInput(e.target.value)}
                     placeholder="Írj a séfnek (pl. csere, +2 tej, kosárba)..."
-                    className="flex-1 bg-white dark:bg-[#090d16] text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 text-[15px] rounded-2xl px-4 py-3 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-emerald-500"
+                    className="flex-1 bg-white dark:bg-[#121510] text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 text-[15px] rounded-2xl px-4 py-3 border border-slate-200 dark:border-white/10 focus:outline-none focus:border-emerald-500"
                   />
                   <button
                     type="submit"
@@ -1189,7 +1191,7 @@ export default function App() {
               </div>
 
               {/* Desktop jobb oldali élő menü-áttekintő panel */}
-              <div className="hidden xl:block xl:col-span-4 rounded-3xl bg-white dark:bg-[#11192a] border border-slate-200/80 dark:border-white/5 p-5 space-y-3 max-h-[calc(100dvh-4rem)] overflow-y-auto shadow-sm dark:shadow-none">
+              <div className="hidden xl:block xl:col-span-4 rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 space-y-3 max-h-[calc(100dvh-4rem)] overflow-y-auto shadow-sm dark:shadow-none">
                 <h3 className="font-bold text-sm text-slate-900 dark:text-white">
                   📅 Aktuális Heti Menü (Élő nézet)
                 </h3>
@@ -1199,7 +1201,7 @@ export default function App() {
                     return (
                       <div
                         key={d.key}
-                        className="rounded-2xl bg-slate-50 dark:bg-[#0b101d] border border-slate-200/70 dark:border-white/5 p-3 text-xs space-y-1"
+                        className="rounded-2xl bg-slate-50 dark:bg-[#151912] border border-slate-200/70 dark:border-white/5 p-3 text-xs space-y-1"
                       >
                         <div className="font-bold text-emerald-700 dark:text-emerald-400">
                           {d.label}
@@ -1229,7 +1231,7 @@ export default function App() {
               {/* Termékek rácsa (bal 8-9 oszlop PC-n, mobil alul) */}
               <div className="xl:col-span-8 2xl:col-span-9 order-2 xl:order-1">
                 {!cart || cart.items.length === 0 ? (
-                  <div className="rounded-3xl bg-white dark:bg-[#11192a] border border-slate-200 dark:border-white/5 p-12 text-center space-y-3 shadow-sm dark:shadow-none">
+                  <div className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200 dark:border-white/5 p-12 text-center space-y-3 shadow-sm dark:shadow-none">
                     <ShoppingBasket className="w-12 h-12 mx-auto text-slate-400 dark:text-slate-600" />
                     <p className="text-slate-700 dark:text-slate-300 font-semibold">
                       A Kifli kosarad jelenleg üres
@@ -1243,7 +1245,7 @@ export default function App() {
                     {cart.items.map((item) => (
                       <div
                         key={item.product_id}
-                        className="rounded-2xl bg-white dark:bg-[#11192a] border border-slate-200/80 dark:border-white/5 p-3.5 flex items-center gap-3.5 shadow-sm dark:shadow-none"
+                        className="rounded-2xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-3.5 flex items-center gap-3.5 shadow-sm dark:shadow-none"
                       >
                         {item.image_url ? (
                           <img
@@ -1293,7 +1295,7 @@ export default function App() {
                             <Star className="w-4 h-4" />
                           </button>
 
-                          <div className="flex items-center gap-1 bg-slate-100 dark:bg-[#090d16] border border-slate-200 dark:border-white/10 rounded-xl p-1">
+                          <div className="flex items-center gap-1 bg-slate-100 dark:bg-[#121510] border border-slate-200 dark:border-white/10 rounded-xl p-1">
                             <button
                               disabled={busyAction === `item-${item.product_id}`}
                               onClick={() => handleCartItemQty(item.product_id, item.quantity - 1)}
@@ -1324,7 +1326,7 @@ export default function App() {
               </div>
 
               {/* Kosár Összegző & Checkout Kártya (Sticky jobb panel PC-n) */}
-              <div className="xl:col-span-4 2xl:col-span-3 order-1 xl:order-2 xl:sticky xl:top-6 rounded-3xl bg-gradient-to-br from-emerald-600 to-teal-800 dark:from-[#132338] dark:to-[#0f172a] border border-emerald-500/25 p-5 space-y-4 text-white shadow-lg">
+              <div className="xl:col-span-4 2xl:col-span-3 order-1 xl:order-2 xl:sticky xl:top-6 rounded-3xl bg-gradient-to-br from-[#6FA014] to-[#47690C] dark:from-[#2F4712] dark:to-[#1A2412] border border-emerald-500/25 p-5 space-y-4 text-white shadow-lg">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <span className="text-xs font-semibold text-emerald-100 dark:text-emerald-400 uppercase tracking-wider">
@@ -1439,7 +1441,7 @@ export default function App() {
               {/* Bal: Gyors felvétel kártya */}
               <form
                 onSubmit={handleAddGeneral}
-                className="xl:col-span-4 xl:sticky xl:top-6 rounded-3xl bg-white dark:bg-[#11192a] border border-slate-200/80 dark:border-white/5 p-5 space-y-3 shadow-sm dark:shadow-none"
+                className="xl:col-span-4 xl:sticky xl:top-6 rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 space-y-3 shadow-sm dark:shadow-none"
               >
                 <div className="flex items-center justify-between">
                   <h2 className="font-bold text-base text-slate-900 dark:text-white">
@@ -1453,7 +1455,7 @@ export default function App() {
                   value={genName}
                   onChange={(e) => setGenName(e.target.value)}
                   placeholder="Pl. Papírzsebkendő, Domestos, Elem..."
-                  className="w-full bg-slate-100 dark:bg-[#090d16] text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 rounded-2xl px-4 py-3 text-[15px] border border-slate-200 dark:border-white/10 focus:outline-none focus:border-emerald-500"
+                  className="w-full bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 rounded-2xl px-4 py-3 text-[15px] border border-slate-200 dark:border-white/10 focus:outline-none focus:border-emerald-500"
                   required
                 />
 
@@ -1462,7 +1464,7 @@ export default function App() {
                   value={genBrand}
                   onChange={(e) => setGenBrand(e.target.value)}
                   placeholder="Pontos márka (opc., pl. Zewa Deluxe)"
-                  className="w-full bg-slate-100 dark:bg-[#090d16] text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 rounded-2xl px-3.5 py-2.5 text-sm border border-slate-200 dark:border-white/10 focus:outline-none focus:border-emerald-500"
+                  className="w-full bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white placeholder-slate-400 dark:placeholder-slate-500 rounded-2xl px-3.5 py-2.5 text-sm border border-slate-200 dark:border-white/10 focus:outline-none focus:border-emerald-500"
                 />
 
                 <div className="grid grid-cols-12 gap-2">
@@ -1472,14 +1474,14 @@ export default function App() {
                     min="0.5"
                     value={genQty}
                     onChange={(e) => setGenQty(e.target.value)}
-                    className="col-span-4 bg-slate-100 dark:bg-[#090d16] text-slate-900 dark:text-white text-center rounded-2xl px-2 py-2.5 text-sm border border-slate-200 dark:border-white/10"
+                    className="col-span-4 bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white text-center rounded-2xl px-2 py-2.5 text-sm border border-slate-200 dark:border-white/10"
                   />
                   <input
                     type="text"
                     value={genUnit}
                     onChange={(e) => setGenUnit(e.target.value)}
                     placeholder="db"
-                    className="col-span-4 bg-slate-100 dark:bg-[#090d16] text-slate-900 dark:text-white text-center rounded-2xl px-2 py-2.5 text-sm border border-slate-200 dark:border-white/10"
+                    className="col-span-4 bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white text-center rounded-2xl px-2 py-2.5 text-sm border border-slate-200 dark:border-white/10"
                   />
                   <button
                     type="submit"
@@ -1493,7 +1495,7 @@ export default function App() {
               {/* Jobb: Smart Restock + Státusz sáv + többoszlopos lista */}
               <div className="xl:col-span-8 space-y-4">
                 {/* 🧠 Smart Restock Fogyás-előrejelző (0 AI token!) */}
-                <div className="rounded-3xl bg-white dark:bg-[#11192a] border border-slate-200/80 dark:border-white/5 p-4 sm:p-5 space-y-3 shadow-sm dark:shadow-none">
+                <div className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-4 sm:p-5 space-y-3 shadow-sm dark:shadow-none">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <h3 className="font-bold text-sm sm:text-base text-slate-900 dark:text-white">
@@ -1526,7 +1528,7 @@ export default function App() {
                         {smartRestock.suggestions.map((sug, idx) => (
                           <div
                             key={idx}
-                            className="rounded-2xl bg-slate-50 dark:bg-[#090d16] border border-slate-200/80 dark:border-white/10 p-3 flex items-center justify-between gap-2"
+                            className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-3 flex items-center justify-between gap-2"
                           >
                             <div className="min-w-0">
                               <div className="flex items-center gap-1.5">
@@ -1601,7 +1603,7 @@ export default function App() {
                 )}
 
                 {generalItems.length === 0 ? (
-                  <div className="rounded-3xl bg-white dark:bg-[#11192a] border border-slate-200 dark:border-white/5 p-10 text-center text-slate-500 dark:text-slate-400 text-sm shadow-sm dark:shadow-none">
+                  <div className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200 dark:border-white/5 p-10 text-center text-slate-500 dark:text-slate-400 text-sm shadow-sm dark:shadow-none">
                     Minden megvan itthon — jelenleg üres az egyszeri háztartási lista! ✨
                   </div>
                 ) : (
@@ -1609,7 +1611,7 @@ export default function App() {
                     {generalItems.map((g) => (
                       <div
                         key={g.id}
-                        className="rounded-2xl bg-white dark:bg-[#11192a] border border-slate-200/80 dark:border-white/5 px-4 py-3.5 flex items-center justify-between gap-3 shadow-sm dark:shadow-none"
+                        className="rounded-2xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 px-4 py-3.5 flex items-center justify-between gap-3 shadow-sm dark:shadow-none"
                       >
                         <div className="min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
@@ -1674,7 +1676,7 @@ export default function App() {
                       className={`px-3.5 py-2 rounded-2xl text-xs font-bold transition ${
                         recipeFilter === f.v
                           ? "bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950 shadow-sm"
-                          : "bg-white dark:bg-[#11192a] text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-white/5"
+                          : "bg-white dark:bg-[#1C2218] text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-white/5"
                       }`}
                     >
                       {f.l}
@@ -1704,7 +1706,7 @@ export default function App() {
                   return (
                     <div
                       key={r.id}
-                      className="rounded-3xl bg-white dark:bg-[#11192a] border border-slate-200/80 dark:border-white/5 overflow-hidden flex flex-col justify-between shadow-sm dark:shadow-none"
+                      className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 overflow-hidden flex flex-col justify-between shadow-sm dark:shadow-none"
                     >
                       <div>
                         {r.image_url && (
@@ -1773,7 +1775,7 @@ export default function App() {
                             {r.ingredients.map((ing, i) => (
                               <span
                                 key={i}
-                                className="text-xs px-2.5 py-1 rounded-xl bg-slate-50 dark:bg-[#090d16] border border-slate-200/80 dark:border-white/5 text-slate-700 dark:text-slate-300"
+                                className="text-xs px-2.5 py-1 rounded-xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/5 text-slate-700 dark:text-slate-300"
                               >
                                 {ing.name}{" "}
                                 <span className="text-slate-400 dark:text-slate-500">
@@ -1803,7 +1805,7 @@ export default function App() {
           {activeTab === "settings" && (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
               {/* Kifli OAuth kártya */}
-              <div className="rounded-3xl bg-white dark:bg-[#11192a] border border-slate-200/80 dark:border-white/5 p-5 space-y-4 shadow-sm dark:shadow-none">
+              <div className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 space-y-4 shadow-sm dark:shadow-none">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2.5">
                     <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
@@ -1883,7 +1885,7 @@ export default function App() {
                         value={callbackUrl}
                         onChange={(e) => setCallbackUrl(e.target.value)}
                         placeholder="http://localhost:3334/oauth/callback?code=..."
-                        className="flex-1 bg-slate-100 dark:bg-[#090d16] rounded-xl px-3 py-2 text-xs border border-slate-200 dark:border-white/10"
+                        className="flex-1 bg-slate-100 dark:bg-[#121510] rounded-xl px-3 py-2 text-xs border border-slate-200 dark:border-white/10"
                         required
                       />
                       <button
@@ -1898,7 +1900,7 @@ export default function App() {
               </div>
 
               {/* Kamra alapanyagok */}
-              <div className="rounded-3xl bg-white dark:bg-[#11192a] border border-slate-200/80 dark:border-white/5 p-5 space-y-3 shadow-sm dark:shadow-none">
+              <div className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 space-y-3 shadow-sm dark:shadow-none">
                 <h3 className="font-bold text-base text-slate-900 dark:text-white">
                   🧂 Kamra-alapanyagok
                 </h3>
@@ -1923,7 +1925,7 @@ export default function App() {
                     value={newStaple}
                     onChange={(e) => setNewStaple(e.target.value)}
                     placeholder="Pl. mustár, fahéj..."
-                    className="flex-1 bg-slate-100 dark:bg-[#090d16] rounded-2xl px-4 py-2.5 text-sm border border-slate-200 dark:border-white/10"
+                    className="flex-1 bg-slate-100 dark:bg-[#121510] rounded-2xl px-4 py-2.5 text-sm border border-slate-200 dark:border-white/10"
                   />
                   <button
                     type="submit"
@@ -1937,7 +1939,7 @@ export default function App() {
                   {staples.map((s) => (
                     <span
                       key={s.key}
-                      className="inline-flex items-center gap-1.5 text-xs bg-slate-100 dark:bg-[#090d16] border border-slate-200 dark:border-white/10 text-slate-700 dark:text-slate-200 px-3 py-1.5 rounded-full"
+                      className="inline-flex items-center gap-1.5 text-xs bg-slate-100 dark:bg-[#121510] border border-slate-200 dark:border-white/10 text-slate-700 dark:text-slate-200 px-3 py-1.5 rounded-full"
                     >
                       {s.display_name}
                       <button
@@ -1957,7 +1959,7 @@ export default function App() {
               </div>
 
               {/* Kedvenc Kifli termékek */}
-              <div className="rounded-3xl bg-white dark:bg-[#11192a] border border-slate-200/80 dark:border-white/5 p-5 space-y-3 shadow-sm dark:shadow-none">
+              <div className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 space-y-3 shadow-sm dark:shadow-none">
                 <h3 className="font-bold text-base text-slate-900 dark:text-white">
                   ⭐ Kedvenc Márkák
                 </h3>
@@ -1971,7 +1973,7 @@ export default function App() {
                     {prefs.map((p) => (
                       <div
                         key={p.ingredient_key}
-                        className="flex items-center justify-between rounded-2xl bg-slate-50 dark:bg-[#090d16] border border-slate-200/80 dark:border-white/5 px-3.5 py-2.5 text-xs"
+                        className="flex items-center justify-between rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/5 px-3.5 py-2.5 text-xs"
                       >
                         <div>
                           <strong className="text-emerald-700 dark:text-emerald-300">
@@ -1997,7 +1999,7 @@ export default function App() {
               </div>
 
               {/* 4. Kártya (Teljes szélességű): 🥗 TERVEZŐ PREFERENCIÁK (Büdzsé, Allergének, Sajátmárka, Akciók) */}
-              <div className="lg:col-span-3 rounded-3xl bg-white dark:bg-[#11192a] border border-slate-200/80 dark:border-white/5 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
+              <div className="lg:col-span-3 rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
                 <div>
                   <h3 className="font-bold text-base text-slate-900 dark:text-white">
                     🥗 Heti Tervező &amp; Kosár Preferenciák (Büdzsé · Allergének · Sajátmárka · Akciók)
@@ -2009,7 +2011,7 @@ export default function App() {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
                   {/* Heti büdzsé */}
-                  <div className="rounded-2xl bg-slate-50 dark:bg-[#090d16] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
+                  <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
                     <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
                       💰 Heti büdzsé limit (Ft, 0 = nincs limit)
                     </label>
@@ -2025,7 +2027,7 @@ export default function App() {
                             weekly_budget_ft: Math.max(0, parseInt(e.target.value || "0", 10)),
                           }))
                         }
-                        className="flex-1 bg-white dark:bg-[#11192a] text-slate-900 dark:text-white rounded-xl px-3 py-2 text-sm border border-slate-200 dark:border-white/10"
+                        className="flex-1 bg-white dark:bg-[#1C2218] text-slate-900 dark:text-white rounded-xl px-3 py-2 text-sm border border-slate-200 dark:border-white/10"
                       />
                       <button
                         type="button"
@@ -2040,7 +2042,7 @@ export default function App() {
                   </div>
 
                   {/* Min. Healthy Score */}
-                  <div className="rounded-2xl bg-slate-50 dark:bg-[#090d16] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
+                  <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
                     <div className="flex justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
                       <span>💚 Cél heti Healthy Score</span>
                       <span className="text-emerald-600 dark:text-emerald-400">
@@ -2070,7 +2072,7 @@ export default function App() {
                   </div>
 
                   {/* Sajátmárka + Akciók kapcsolók */}
-                  <div className="rounded-2xl bg-slate-50 dark:bg-[#090d16] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2.5">
+                  <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2.5">
                     <label className="flex items-center justify-between gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer">
                       <span>🏷️ Kifli sajátmárkák előnyben (Miil, Moddia, Yutto)</span>
                       <input
@@ -2098,7 +2100,7 @@ export default function App() {
                   </div>
 
                   {/* Allergén tiltólista */}
-                  <div className="rounded-2xl bg-slate-50 dark:bg-[#090d16] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
+                  <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
                     <div className="text-xs font-bold text-slate-700 dark:text-slate-300">
                       🚫 Allergén / Diéta szűrő
                     </div>
@@ -2118,7 +2120,7 @@ export default function App() {
                             className={`px-2.5 py-1 rounded-xl text-[11px] font-bold border transition ${
                               active
                                 ? "bg-rose-500 text-white border-rose-500"
-                                : "bg-white dark:bg-[#11192a] text-slate-600 dark:text-slate-400 border-slate-200 dark:border-white/10"
+                                : "bg-white dark:bg-[#1C2218] text-slate-600 dark:text-slate-400 border-slate-200 dark:border-white/10"
                             }`}
                           >
                             {active ? `✕ ${al}` : al}
@@ -2131,7 +2133,7 @@ export default function App() {
               </div>
 
               {/* 5. Kártya (Teljes szélességű): SAJÁT KIFLI OTTHON MCP SZERVER CLAUDE-HOZ */}
-              <div className="lg:col-span-3 rounded-3xl bg-white dark:bg-[#11192a] border border-emerald-500/30 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
+              <div className="lg:col-span-3 rounded-3xl bg-white dark:bg-[#1C2218] border border-emerald-500/30 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5">
                     <Terminal className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
@@ -2150,7 +2152,7 @@ export default function App() {
                 </div>
 
                 <div className="relative">
-                  <pre className="rounded-2xl bg-slate-900 dark:bg-[#090d16] text-emerald-300 text-xs p-4 overflow-x-auto border border-slate-800 dark:border-white/10 leading-relaxed">
+                  <pre className="rounded-2xl bg-slate-900 dark:bg-[#121510] text-emerald-300 text-xs p-4 overflow-x-auto border border-slate-800 dark:border-white/10 leading-relaxed">
 {JSON.stringify(
   {
     mcpServers: {
@@ -2201,7 +2203,7 @@ export default function App() {
       {/* =====================================================================
           MOBIL STICKY BOTTOM TAB BAR (Light + Dark, iOS safe-area!)
          ===================================================================== */}
-      <nav className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-white/95 dark:bg-[#0d1322]/95 backdrop-blur-2xl border-t border-slate-200 dark:border-white/10 pb-safe">
+      <nav className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-white/95 dark:bg-[#151912]/95 backdrop-blur-2xl border-t border-slate-200 dark:border-white/10 pb-safe">
         <div className="grid grid-cols-6 px-1 pt-1.5">
           {navItems.map((item) => {
             const Icon = item.icon;
@@ -2275,7 +2277,7 @@ export default function App() {
         <div className="fixed inset-0 z-50 bg-slate-900/60 dark:bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
           <form
             onSubmit={handleSaveRecipe}
-            className="w-full max-w-lg max-h-[92dvh] overflow-y-auto rounded-t-3xl sm:rounded-3xl bg-white dark:bg-[#11192a] border border-slate-200 dark:border-white/10 p-5 space-y-4 shadow-2xl"
+            className="w-full max-w-lg max-h-[92dvh] overflow-y-auto rounded-t-3xl sm:rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200 dark:border-white/10 p-5 space-y-4 shadow-2xl"
           >
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-base text-slate-900 dark:text-white">
@@ -2298,12 +2300,12 @@ export default function App() {
               value={recTitle}
               onChange={(e) => setRecTitle(e.target.value)}
               placeholder="Recept neve (pl. Tárkonyos csirkeraguleves)"
-              className="w-full bg-slate-100 dark:bg-[#090d16] text-slate-900 dark:text-white rounded-2xl px-4 py-3 text-sm border border-slate-200 dark:border-white/10"
+              className="w-full bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white rounded-2xl px-4 py-3 text-sm border border-slate-200 dark:border-white/10"
               required
             />
 
             {/* Képfeltöltés + előnézet */}
-            <div className="rounded-2xl bg-slate-50 dark:bg-[#090d16]/70 border border-slate-200 dark:border-white/10 p-3 flex items-center gap-3">
+            <div className="rounded-2xl bg-slate-50 dark:bg-[#121510]/70 border border-slate-200 dark:border-white/10 p-3 flex items-center gap-3">
               {pendingImagePreview || recImageUrl ? (
                 <img
                   src={pendingImagePreview || recImageUrl}
@@ -2375,7 +2377,7 @@ export default function App() {
                       className={`py-2 rounded-xl text-xs font-bold border transition flex flex-col items-center gap-0.5 ${
                         active
                           ? "bg-emerald-600 text-white border-emerald-600 dark:bg-emerald-500 dark:text-slate-950 dark:border-emerald-500 shadow-sm"
-                          : "bg-slate-100 dark:bg-[#090d16] text-slate-600 dark:text-slate-400 border-slate-200 dark:border-white/10"
+                          : "bg-slate-100 dark:bg-[#121510] text-slate-600 dark:text-slate-400 border-slate-200 dark:border-white/10"
                       }`}
                     >
                       <span className="text-sm leading-none">{meta.emoji}</span>
@@ -2406,7 +2408,7 @@ export default function App() {
                       className={`px-3 py-1.5 rounded-xl text-xs font-bold border ${
                         sel
                           ? "bg-emerald-600 text-white border-emerald-600 dark:bg-emerald-500 dark:text-slate-950 dark:border-emerald-500"
-                          : "bg-slate-100 dark:bg-[#090d16] text-slate-600 dark:text-slate-400 border-slate-200 dark:border-white/10"
+                          : "bg-slate-100 dark:bg-[#121510] text-slate-600 dark:text-slate-400 border-slate-200 dark:border-white/10"
                       }`}
                     >
                       {c.l}
@@ -2422,7 +2424,7 @@ export default function App() {
                   min={1}
                   value={recServings}
                   onChange={(e) => setRecServings(parseInt(e.target.value || "2", 10))}
-                  className="w-14 bg-slate-100 dark:bg-[#090d16] text-slate-900 dark:text-white text-center rounded-xl py-1.5 border border-slate-200 dark:border-white/10"
+                  className="w-14 bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white text-center rounded-xl py-1.5 border border-slate-200 dark:border-white/10"
                 />
               </div>
             </div>
@@ -2437,7 +2439,7 @@ export default function App() {
               {recIngs.map((ing, idx) => (
                 <div
                   key={idx}
-                  className="rounded-2xl bg-slate-50 dark:bg-[#090d16]/70 border border-slate-200 dark:border-white/5 p-2 space-y-1.5"
+                  className="rounded-2xl bg-slate-50 dark:bg-[#121510]/70 border border-slate-200 dark:border-white/5 p-2 space-y-1.5"
                 >
                   <div className="grid grid-cols-12 gap-1.5 items-center">
                     <input
@@ -2449,7 +2451,7 @@ export default function App() {
                         setRecIngs(copy);
                       }}
                       placeholder="Alapanyag"
-                      className="col-span-5 bg-white dark:bg-[#090d16] text-slate-900 dark:text-white rounded-xl px-2.5 py-2 text-xs border border-slate-200 dark:border-white/10"
+                      className="col-span-5 bg-white dark:bg-[#121510] text-slate-900 dark:text-white rounded-xl px-2.5 py-2 text-xs border border-slate-200 dark:border-white/10"
                     />
                     <input
                       type="number"
@@ -2460,7 +2462,7 @@ export default function App() {
                         copy[idx] = { ...copy[idx], quantity: parseFloat(e.target.value || "1") };
                         setRecIngs(copy);
                       }}
-                      className="col-span-2 bg-white dark:bg-[#090d16] text-slate-900 dark:text-white text-center rounded-xl px-1 py-2 text-xs border border-slate-200 dark:border-white/10"
+                      className="col-span-2 bg-white dark:bg-[#121510] text-slate-900 dark:text-white text-center rounded-xl px-1 py-2 text-xs border border-slate-200 dark:border-white/10"
                     />
                     <input
                       type="text"
@@ -2471,7 +2473,7 @@ export default function App() {
                         setRecIngs(copy);
                       }}
                       placeholder="g/db"
-                      className="col-span-3 bg-white dark:bg-[#090d16] text-slate-900 dark:text-white text-center rounded-xl px-1 py-2 text-xs border border-slate-200 dark:border-white/10"
+                      className="col-span-3 bg-white dark:bg-[#121510] text-slate-900 dark:text-white text-center rounded-xl px-1 py-2 text-xs border border-slate-200 dark:border-white/10"
                     />
                     <button
                       type="button"
@@ -2506,7 +2508,7 @@ export default function App() {
                       setRecIngs(copy);
                     }}
                     placeholder="Opcionális márka / megjegyzés (pl. Barilla, laktózmentes...)"
-                    className="w-full bg-white dark:bg-[#090d16] rounded-xl px-2.5 py-1.5 text-[11px] text-slate-700 dark:text-slate-300 placeholder-slate-400 dark:placeholder-slate-600 border border-slate-200 dark:border-white/5"
+                    className="w-full bg-white dark:bg-[#121510] rounded-xl px-2.5 py-1.5 text-[11px] text-slate-700 dark:text-slate-300 placeholder-slate-400 dark:placeholder-slate-600 border border-slate-200 dark:border-white/5"
                   />
                 </div>
               ))}
@@ -2529,7 +2531,7 @@ export default function App() {
               value={recInstructions}
               onChange={(e) => setRecInstructions(e.target.value)}
               placeholder="Rövid megjegyzés / elkészítés (opcionális)"
-              className="w-full bg-slate-100 dark:bg-[#090d16] text-slate-900 dark:text-white rounded-2xl px-3.5 py-2.5 text-xs border border-slate-200 dark:border-white/10"
+              className="w-full bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white rounded-2xl px-3.5 py-2.5 text-xs border border-slate-200 dark:border-white/10"
             />
 
             <button
@@ -2548,7 +2550,7 @@ export default function App() {
         <div className="fixed inset-0 z-50 bg-slate-900/60 dark:bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
           <form
             onSubmit={handleImportRecipe}
-            className="w-full max-w-lg rounded-t-3xl sm:rounded-3xl bg-white dark:bg-[#11192a] border border-slate-200 dark:border-white/10 p-5 space-y-4 shadow-2xl"
+            className="w-full max-w-lg rounded-t-3xl sm:rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200 dark:border-white/10 p-5 space-y-4 shadow-2xl"
           >
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-base text-slate-900 dark:text-white">
@@ -2570,7 +2572,7 @@ export default function App() {
               value={importText}
               onChange={(e) => setImportText(e.target.value)}
               placeholder="https://... vagy nyers recept szöveg"
-              className="w-full bg-slate-100 dark:bg-[#090d16] text-slate-900 dark:text-white rounded-2xl px-4 py-3 text-sm border border-slate-200 dark:border-white/10"
+              className="w-full bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white rounded-2xl px-4 py-3 text-sm border border-slate-200 dark:border-white/10"
               required
             />
             <button

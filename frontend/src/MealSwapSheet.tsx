@@ -70,9 +70,9 @@ export function MealSwapSheet({
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 dark:bg-black/75 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
-      <div className="w-full max-w-2xl max-h-[92dvh] flex flex-col rounded-t-3xl sm:rounded-3xl bg-white dark:bg-[#11192a] border border-slate-200 dark:border-white/10 shadow-2xl overflow-hidden">
+      <div className="w-full max-w-2xl max-h-[92dvh] flex flex-col rounded-t-3xl sm:rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200 dark:border-white/10 shadow-2xl overflow-hidden">
         {/* Fejléc */}
-        <div className="px-5 py-4 border-b border-slate-200 dark:border-white/10 flex items-center justify-between bg-slate-50 dark:bg-[#141e33]">
+        <div className="px-5 py-4 border-b border-slate-200 dark:border-white/10 flex items-center justify-between bg-slate-50 dark:bg-[#20271C]">
           <div>
             <div className="text-xs font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">
               ⚡ Azonnali csere (0 AI token)
@@ -91,7 +91,7 @@ export function MealSwapSheet({
         </div>
 
         {/* Napok többes kijelölése (pl. Hétfő + Kedd egyszerre!) */}
-        <div className="px-5 py-3 border-b border-slate-200 dark:border-white/10 bg-slate-50/60 dark:bg-[#0d1424] space-y-2">
+        <div className="px-5 py-3 border-b border-slate-200 dark:border-white/10 bg-slate-50/60 dark:bg-[#151912] space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
               Melyik napokra állítsam be egyszerre? (pl. 2 napos főzés)
@@ -108,7 +108,7 @@ export function MealSwapSheet({
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition flex items-center gap-1 ${
                     active
                       ? "bg-emerald-600 text-white border-emerald-600 dark:bg-emerald-500 dark:text-slate-950 dark:border-emerald-500 shadow-sm"
-                      : "bg-white dark:bg-[#11192a] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10"
+                      : "bg-white dark:bg-[#1C2218] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10"
                   }`}
                 >
                   {active && <Check className="w-3 h-3" />}
@@ -128,7 +128,7 @@ export function MealSwapSheet({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Keresés a saját receptjeid között..."
-              className="w-full pl-9 pr-3 py-2.5 rounded-2xl text-sm bg-slate-100 dark:bg-[#090d16] text-slate-900 dark:text-white border border-slate-200 dark:border-white/10 focus:outline-none focus:border-emerald-500"
+              className="w-full pl-9 pr-3 py-2.5 rounded-2xl text-sm bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white border border-slate-200 dark:border-white/10 focus:outline-none focus:border-emerald-500"
             />
           </div>
 
@@ -139,7 +139,7 @@ export function MealSwapSheet({
               className={`px-3 py-2 rounded-2xl text-xs font-bold border transition ${
                 onlyMatchingCategory
                   ? "bg-emerald-600 text-white border-emerald-600 dark:bg-emerald-500 dark:text-slate-950 dark:border-emerald-500"
-                  : "bg-slate-100 dark:bg-[#090d16] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10"
+                  : "bg-slate-100 dark:bg-[#121510] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10"
               }`}
             >
               Csak {MEAL_LABELS[mealType].split(" ")[1]}
@@ -150,7 +150,7 @@ export function MealSwapSheet({
               className={`px-3 py-2 rounded-2xl text-xs font-bold border transition ${
                 !onlyMatchingCategory
                   ? "bg-emerald-600 text-white border-emerald-600 dark:bg-emerald-500 dark:text-slate-950 dark:border-emerald-500"
-                  : "bg-slate-100 dark:bg-[#090d16] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10"
+                  : "bg-slate-100 dark:bg-[#121510] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10"
               }`}
             >
               Összes ({recipes.length})
@@ -187,7 +187,7 @@ export function MealSwapSheet({
                     className={`text-left rounded-2xl p-3.5 border transition active:scale-[0.99] ${
                       isCurrent
                         ? "bg-emerald-50 dark:bg-emerald-500/15 border-emerald-500/50"
-                        : "bg-slate-50 hover:bg-emerald-50/60 dark:bg-[#090d16] dark:hover:bg-white/5 border-slate-200 dark:border-white/10"
+                        : "bg-slate-50 hover:bg-emerald-50/60 dark:bg-[#121510] dark:hover:bg-white/5 border-slate-200 dark:border-white/10"
                     }`}
                   >
                     <div className="font-bold text-sm text-slate-900 dark:text-white leading-snug">
@@ -204,7 +204,7 @@ export function MealSwapSheet({
         </div>
 
         {/* Lábléc: Gyors egyedi felirat / Üresre törlés / AI Chat link */}
-        <div className="px-5 py-3.5 border-t border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-[#141e33] space-y-2.5">
+        <div className="px-5 py-3.5 border-t border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-[#20271C] space-y-2.5">
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -219,7 +219,7 @@ export function MealSwapSheet({
               value={customTitle}
               onChange={(e) => setCustomTitle(e.target.value)}
               placeholder="Vagy szabad szöveg (pl. Rendelés / Étterem / Maradék)..."
-              className="flex-1 rounded-xl px-3 py-2 text-xs bg-white dark:bg-[#090d16] text-slate-900 dark:text-white border border-slate-200 dark:border-white/10"
+              className="flex-1 rounded-xl px-3 py-2 text-xs bg-white dark:bg-[#121510] text-slate-900 dark:text-white border border-slate-200 dark:border-white/10"
             />
             <button
               type="submit"

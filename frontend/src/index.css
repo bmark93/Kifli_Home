@@ -1,9 +1,28 @@
 @import "tailwindcss";
 @custom-variant dark (&:where(.dark, .dark *));
 
+/* Autentikus Kifli.hu (Rohlik Group) színpaletta — friss almazöld, meleg krém, arany kifli */
+@theme {
+  --font-sans: "Plus Jakarta Sans", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+
+  /* Tailwind emerald tokenek átirányítása a Kifli.hu hivatalos friss zöldjére */
+  --color-emerald-50: #f5fae8;
+  --color-emerald-100: #e7f4cb;
+  --color-emerald-200: #d1ea9c;
+  --color-emerald-300: #b2db63;
+  --color-emerald-400: #8cc61f;
+  --color-emerald-500: #6fa014;
+  --color-emerald-600: #5c870e;
+  --color-emerald-700: #47690c;
+  --color-emerald-800: #395310;
+  --color-emerald-900: #314712;
+  --color-emerald-950: #182606;
+}
+
 @layer base {
   html,
   body {
+    font-family: var(--font-sans);
     overscroll-behavior-y: none;
     -webkit-tap-highlight-color: transparent;
   }

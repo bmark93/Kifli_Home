@@ -268,7 +268,7 @@ export function FoodTinderSheet({
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4">
-      <div className="relative w-full max-w-md max-h-[96dvh] flex flex-col rounded-t-3xl sm:rounded-3xl bg-white dark:bg-[#0f172a] border border-slate-200 dark:border-white/10 shadow-2xl overflow-hidden">
+      <div className="relative w-full max-w-md max-h-[96dvh] flex flex-col rounded-t-3xl sm:rounded-3xl bg-white dark:bg-[#171C14] border border-slate-200 dark:border-white/10 shadow-2xl overflow-hidden">
         {/* 🎉 IT'S A MATCH! ÜNNEPLŐ OVERLAY */}
         {celebrateMatch && (
           <div className="absolute inset-0 z-40 bg-gradient-to-br from-rose-600/95 via-orange-600/95 to-emerald-700/95 backdrop-blur-md p-6 flex flex-col items-center justify-center text-center text-white space-y-4">
@@ -317,7 +317,7 @@ export function FoodTinderSheet({
         )}
 
         {/* Fejléc */}
-        <div className="px-4 py-3 border-b border-slate-200 dark:border-white/10 flex items-center justify-between bg-slate-50 dark:bg-[#141e33]">
+        <div className="px-4 py-3 border-b border-slate-200 dark:border-white/10 flex items-center justify-between bg-slate-50 dark:bg-[#20271C]">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-rose-500 to-orange-500 text-white flex items-center justify-center shadow">
               <Flame className="w-4 h-4" />
@@ -335,7 +335,7 @@ export function FoodTinderSheet({
           </div>
 
           <div className="flex items-center gap-1.5">
-            <div className="flex rounded-xl bg-slate-200/80 dark:bg-[#090d16] p-0.5 border border-slate-200 dark:border-white/10">
+            <div className="flex rounded-xl bg-slate-200/80 dark:bg-[#121510] p-0.5 border border-slate-200 dark:border-white/10">
               <button
                 type="button"
                 onClick={() => setMode("solo")}
@@ -371,7 +371,7 @@ export function FoodTinderSheet({
         </div>
 
         {/* Kategória + Napválasztó */}
-        <div className="px-4 pt-3 pb-2 space-y-2.5 bg-slate-50/70 dark:bg-[#0c1322] border-b border-slate-200 dark:border-white/10">
+        <div className="px-4 pt-3 pb-2 space-y-2.5 bg-slate-50/70 dark:bg-[#151912] border-b border-slate-200 dark:border-white/10">
           <div className="grid grid-cols-3 gap-1.5">
             {(
               [
@@ -391,7 +391,7 @@ export function FoodTinderSheet({
                   className={`py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition disabled:opacity-60 ${
                     active
                       ? "bg-emerald-600 text-white border-emerald-600 dark:bg-emerald-500 dark:text-slate-950 dark:border-emerald-500 shadow-sm"
-                      : "bg-white dark:bg-[#11192a] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10"
+                      : "bg-white dark:bg-[#1C2218] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10"
                   }`}
                 >
                   <Icon className="w-3.5 h-3.5" />
@@ -413,7 +413,7 @@ export function FoodTinderSheet({
                     className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border transition flex items-center gap-0.5 ${
                       active
                         ? "bg-rose-500 text-white border-rose-500 shadow-sm"
-                        : "bg-white dark:bg-[#11192a] text-slate-600 dark:text-slate-400 border-slate-200 dark:border-white/10"
+                        : "bg-white dark:bg-[#1C2218] text-slate-600 dark:text-slate-400 border-slate-200 dark:border-white/10"
                     }`}
                   >
                     {active && <Check className="w-2.5 h-2.5" />}
@@ -429,7 +429,7 @@ export function FoodTinderSheet({
               className={`shrink-0 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition ${
                 healthyOnly
                   ? "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-500/40"
-                  : "bg-white dark:bg-[#11192a] text-slate-500 border-slate-200 dark:border-white/10"
+                  : "bg-white dark:bg-[#1C2218] text-slate-500 border-slate-200 dark:border-white/10"
               }`}
               title="Csak 4-5 Healthy Score ételek"
             >
@@ -509,7 +509,7 @@ export function FoodTinderSheet({
                 value={joinCodeInput}
                 onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())}
                 placeholder="4 jegyű kód (pl. K7M2)"
-                className="flex-1 text-center font-mono font-bold tracking-widest uppercase bg-slate-100 dark:bg-[#090d16] text-slate-900 dark:text-white rounded-2xl px-4 py-3 text-sm border border-slate-200 dark:border-white/10"
+                className="flex-1 text-center font-mono font-bold tracking-widest uppercase bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white rounded-2xl px-4 py-3 text-sm border border-slate-200 dark:border-white/10"
               />
               <button
                 type="submit"
@@ -550,7 +550,7 @@ export function FoodTinderSheet({
               ) : (
                 <div className="relative w-full h-[355px] sm:h-[380px]">
                   {nextCard && (
-                    <div className="absolute inset-0 rounded-3xl bg-slate-100 dark:bg-[#162036] border border-slate-200 dark:border-white/10 scale-[0.94] translate-y-3 opacity-60 pointer-events-none" />
+                    <div className="absolute inset-0 rounded-3xl bg-slate-100 dark:bg-[#232B1E] border border-slate-200 dark:border-white/10 scale-[0.94] translate-y-3 opacity-60 pointer-events-none" />
                   )}
 
                   <div
@@ -563,7 +563,7 @@ export function FoodTinderSheet({
                       transition: isDragging ? "none" : "transform 0.22s ease-out",
                       touchAction: "none",
                     }}
-                    className="absolute inset-0 rounded-3xl bg-white dark:bg-[#131d31] border border-slate-200 dark:border-white/15 shadow-2xl overflow-hidden flex flex-col cursor-grab active:cursor-grabbing"
+                    className="absolute inset-0 rounded-3xl bg-white dark:bg-[#1F261A] border border-slate-200 dark:border-white/15 shadow-2xl overflow-hidden flex flex-col cursor-grab active:cursor-grabbing"
                   >
                     <div className="relative h-48 sm:h-52 w-full shrink-0 overflow-hidden">
                       {current.image_url ? (
@@ -619,7 +619,7 @@ export function FoodTinderSheet({
                         {current.ingredients.slice(0, 10).map((ing, i) => (
                           <span
                             key={i}
-                            className="text-xs px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-[#090d16] border border-slate-200 dark:border-white/10 text-slate-700 dark:text-slate-300"
+                            className="text-xs px-2.5 py-1 rounded-xl bg-slate-100 dark:bg-[#121510] border border-slate-200 dark:border-white/10 text-slate-700 dark:text-slate-300"
                           >
                             {ing.name}{" "}
                             <span className="text-slate-400">
@@ -639,7 +639,7 @@ export function FoodTinderSheet({
               )}
             </div>
 
-            <div className="px-6 py-4 border-t border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-[#141e33] flex items-center justify-center gap-5">
+            <div className="px-6 py-4 border-t border-slate-200 dark:border-white/10 bg-slate-50 dark:bg-[#20271C] flex items-center justify-center gap-5">
               <button
                 type="button"
                 disabled={index === 0}

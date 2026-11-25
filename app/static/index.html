@@ -8,22 +8,28 @@
     />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-    <meta name="theme-color" content="#090d16" id="meta-theme-color" />
+    <meta name="theme-color" content="#6FA014" id="meta-theme-color" />
     <title>Kifli Otthon — Heti Menü &amp; Bevásárlás</title>
     <link rel="manifest" href="/static/manifest.json" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
     <script>
       (function () {
         var saved = localStorage.getItem("kifli_theme");
-        var isDark = saved ? saved === "dark" : true;
+        var isDark = saved === "dark";
         if (isDark) document.documentElement.classList.add("dark");
         var meta = document.getElementById("meta-theme-color");
-        if (meta) meta.setAttribute("content", isDark ? "#090d16" : "#f8fafc");
+        if (meta) meta.setAttribute("content", isDark ? "#121510" : "#6FA014");
       })();
     </script>
-    <script type="module" crossorigin src="/static/assets/index-CVAYmXjz.js"></script>
-    <link rel="stylesheet" crossorigin href="/static/assets/index-3KwwZTK_.css">
+    <script type="module" crossorigin src="/static/assets/index-CojmejmU.js"></script>
+    <link rel="stylesheet" crossorigin href="/static/assets/index-DJ6_TARe.css">
   </head>
-  <body class="bg-slate-50 text-slate-900 dark:bg-[#090d16] dark:text-slate-100 antialiased selection:bg-emerald-500/30 transition-colors duration-200">
+  <body class="bg-[#F6F6F2] text-[#1F241E] dark:bg-[#121510] dark:text-[#F2F4EE] antialiased selection:bg-[#6FA014]/25 transition-colors duration-200">
     <div id="root"></div>
   </body>
 </html>
