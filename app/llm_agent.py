@@ -23,7 +23,7 @@ FŐ SZABÁLYOK ÉS MŰKÖDÉS:
      * **KÖTELEZŐ KIFLI KÉSZLET-ELLENŐRZÉS:** Ha a Kifli MCP aktív, mielőtt elmented a menüt, ellenőrizd a `kifli__batch_search_products` eszközzel a kiszemelt receptek kulcsfontosságú/szezonális/speciális alapanyagait (pl. frankfurti levesnél a *kelkáposzta*, halas ételnél a hal, speciális zöldségek/gyümölcsök)! **Ha egy étel kulcs-alapanyaga jelenleg NINCS készleten vagy nem kapható a Kiflin, azt a receptet NE ajánld fel erre a hétre** — válassz helyette másik receptet, aminek minden fő hozzávalója elérhető! Ha emiatt kihagytál egy receptet, röviden jelezd a válaszodban!
      * **KIEGYENSÚLYOZOTT HEALTHY SCORE:** Figyelj rá, hogy a heti menü egészségesen kiegyensúlyozott legyen (a heti átlag `healthy_score` legyen legalább **3.3–3.5**)! Ne tegyél egymás után több 1–2-es nehéz ételt — ha az ebéd 2-es házias fogás, a reggeli vagy vacsora legyen 4–5-ös könnyű/egészséges!
      * Válogass változatosan a mentett receptekből (egy nagyobb főzős ebéd nyugodtan szerepelhet 2 egymást követő napon is, hogy praktikus és olcsó legyen!).
-     * Kötelezően tegyél bele **+1 db ÚJ receptajánlást** (`is_recommendation: true`, egy olyan finom és lehetőleg 4–5 healthy score-os ételt, ami még nincs a saját receptek között, a hozzávalói pedig tényleg kaphatók a Kiflin — töltsd ki hozzá a `custom_ingredients` hozzávalókat!).
+     * **AI ÚJ RECEPTAJÁNLÁS SZABÁLY:** Mindig az AKTÍV FELHASZNÁLÓI PREFERENCIÁK szerint járj el! Ha ki van kapcsolva az AI új receptajánlás, KIZÁRÓLAG a felhasználó saját mentett receptjeiből tervezhetsz (`is_recommendation: false`)! Ha be van kapcsolva, pontosan a beállított darabszámú és kizárólag a beállított étkezési kategóriákba (`reggeli` / `ebed` / `vacsora`) tegyél új ajánlást (`is_recommendation: true`, kitöltött `custom_ingredients`-szel, aminek minden hozzávalója kapható a Kiflin)!
      * Mindig mentsd el a kész tervet a `save_full_weekly_plan` eszközzel!
      * A javaslat végén mindig sorold fel az Általános / Háztartási listán szereplő `PENDING` tételeket is!
 
@@ -527,6 +527,16 @@ class ChefShoppingAgent:
         pref_lines.append(
             f"- CÉL HETI ÁTLAG HEALTHY SCORE: legalább {ps.get('min_healthy_score', 3.4)} / 5.0!"
         )
+        if ps.get("ai_recommendations_enabled", True):
+            rec_count = int(ps.get("ai_recommendation_count", 1) or 1)
+            rec_meals = ps.get("ai_recommendation_meals") or ["ebed"]
+            pref_lines.append(
+                f"- AI ÚJ RECEPTAJÁNLÁS: BEKAPCSOLVA! Pontosan **{rec_count} db** új, még nem mentett receptajánlást tegyél a heti menübe (`is_recommendation: true`), KIZÁRÓLAG ezekben a kategóriákban: **{', '.join(rec_meals)}**!"
+            )
+        else:
+            pref_lines.append(
+                "- AI ÚJ RECEPTAJÁNLÁS: KIKAPCSOLVA! NE találj ki új/random receptet, KIZÁRÓLAG a felhasználó saját mentett receptjeiből állítsd össze a teljes heti menüt (`is_recommendation: false` mindenhol)!"
+            )
         prefs_block = "\n".join(pref_lines)
 
         messages: list[dict[str, Any]] = [
@@ -590,12 +600,28 @@ class ChefShoppingAgent:
         return fallback
 
     async def generate_monday_weekly_proposal(self) -> str:
+        ps = self.db.get_planner_settings()
+        if ps.get("ai_recommendations_enabled", True):
+            rec_count = int(ps.get("ai_recommendation_count", 1) or 1)
+            rec_meals = ", ".join(ps.get("ai_recommendation_meals") or ["ebed"])
+            reco_instruction = (
+                f"+ pontosan **{rec_count} db** izgalmas ÚJ receptajánlással "
+                f"(`is_recommendation=true`, kizárólag `{rec_meals}` kategóriá(k)ban, "
+                "kitöltött `custom_ingredients`-szel, aminek minden hozzávalója kapható a Kiflin)"
+            )
+            reco_summary = f"emeld ki a 🌟 +{rec_count} új ajánlást ({rec_meals}), "
+        else:
+            reco_instruction = (
+                "KIZÁRÓLAG a saját mentett receptekből (NE tegyél bele új/random AI ötletet, mert ki van kapcsolva!)"
+            )
+            reco_summary = ""
+
         prompt = (
             "Készíts nekünk egy friss heti menütervezetet erre a hétre (Hétfőtől Vasárnapig: reggeli, ebéd, vacsora)! "
             "1) Nézd meg a mentett receptjeinket (`list_saved_recipes` — nézd a `healthy_score` értékeket is!) és az Általános/Háztartási listánkat (`get_current_weekly_plan`). "
             "2) Ha a Kifli MCP be van jelentkezve, KÖTELEZŐEN ellenőrizd a `kifli__batch_search_products` eszközzel a kiszemelt receptek fő/szezonális alapanyagait (pl. kelkáposzta, friss hal, speciális zöldség): ha egy fő hozzávaló NINCS készleten a Kiflin, NE ajánld fel azt az ételt erre a hétre! "
-            "3) Állítsd össze a heti menüt kiegyensúlyozott `healthy_score` elosztással (heti átlag >= 3.3, váltogasd a könnyű 4–5-ös és a házias 2–3-as ételeket) + pontosan 1 db izgalmas ÚJ receptajánlással (`is_recommendation=true`, kitöltött `custom_ingredients`-szel, aminek minden hozzávalója kapható a Kiflin), és mentsd el a `save_full_weekly_plan` eszközzel! "
-            "4) Köszönj nekünk, mutasd be áttekinthetően a heti menüt (röviden jelezve a heti átlag healthy score-t és ha valamit készlethiány miatt ki kellett hagyni), emeld ki a 🌟 +1 ajánlást, sorold fel mi van az 🧻 Általános listán, és kérdezd meg: 'Mit szólsz hozzá? Módosítsunk valamin, vagy összerakhatom a Kifli kosarat?'"
+            f"3) Állítsd össze a heti menüt kiegyensúlyozott `healthy_score` elosztással (heti átlag >= {ps.get('min_healthy_score', 3.4)}) {reco_instruction}, és mentsd el a `save_full_weekly_plan` eszközzel! "
+            f"4) Köszönj nekünk, mutasd be áttekinthetően a heti menüt (röviden jelezve a heti átlag healthy score-t és ha valamit készlethiány miatt ki kellett hagyni), {reco_summary}sorold fel mi van az 🧻 Általános listán, és kérdezd meg: 'Mit szólsz hozzá? Módosítsunk valamin, vagy összerakhatom a Kifli kosarat?'"
         )
         return await self.chat(prompt, source="scheduler")
 

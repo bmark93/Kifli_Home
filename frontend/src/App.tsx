@@ -240,6 +240,9 @@ export default function App() {
     prefer_private_label: true,
     prefer_discounts_and_save_food: true,
     min_healthy_score: 3.4,
+    ai_recommendations_enabled: true,
+    ai_recommendation_count: 1,
+    ai_recommendation_meals: ["ebed"],
   });
   const [smartRestock, setSmartRestock] = useState<SmartRestockResponse | null>(null);
   const [favoriteSwapModal, setFavoriteSwapModal] = useState<{
@@ -2201,6 +2204,94 @@ export default function App() {
                       })}
                     </div>
                   </div>
+                </div>
+
+                {/* ✨ AI Random Új Receptajánlás vezérlő (Ki/Be, Hány db, Melyik étkezésben) */}
+                <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                  <label className="flex items-center gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={plannerSettings.ai_recommendations_enabled}
+                      onChange={(e) =>
+                        savePlannerSettings({ ai_recommendations_enabled: e.target.checked })
+                      }
+                      className="w-5 h-5 accent-emerald-500 shrink-0"
+                    />
+                    <div>
+                      <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                        ✨ AI új receptajánlások a heti menüben (Ki / Be)
+                      </div>
+                      <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                        {plannerSettings.ai_recommendations_enabled
+                          ? "A heti menü generáláskor a saját receptjeid mellé betesz új AI ötleteket is."
+                          : "Kikapcsolva: a heti menü 100%-ban csak a saját elmentett receptjeidből készül!"}
+                      </div>
+                    </div>
+                  </label>
+
+                  {plannerSettings.ai_recommendations_enabled && (
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                          Mennyi?
+                        </span>
+                        {[1, 2, 3, 4, 5].map((cnt) => {
+                          const active = plannerSettings.ai_recommendation_count === cnt;
+                          return (
+                            <button
+                              type="button"
+                              key={cnt}
+                              onClick={() => savePlannerSettings({ ai_recommendation_count: cnt })}
+                              className={`w-8 h-8 rounded-xl text-xs font-bold border transition ${
+                                active
+                                  ? "bg-emerald-600 text-white border-emerald-600 dark:bg-emerald-500 dark:text-slate-950 dark:border-emerald-500"
+                                  : "bg-white dark:bg-[#1C2218] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10"
+                              }`}
+                            >
+                              {cnt}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+                          Miben?
+                        </span>
+                        {(
+                          [
+                            { id: "reggeli", l: "🌅 Reggeli" },
+                            { id: "ebed", l: "🍲 Ebéd" },
+                            { id: "vacsora", l: "🌙 Vacsora" },
+                          ] as const
+                        ).map((m) => {
+                          const meals = plannerSettings.ai_recommendation_meals || ["ebed"];
+                          const active = meals.includes(m.id);
+                          return (
+                            <button
+                              type="button"
+                              key={m.id}
+                              onClick={() => {
+                                const next = active
+                                  ? meals.filter((x) => x !== m.id)
+                                  : [...meals, m.id];
+                                if (next.length > 0) {
+                                  savePlannerSettings({ ai_recommendation_meals: next });
+                                }
+                              }}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition ${
+                                active
+                                  ? "bg-emerald-600 text-white border-emerald-600 dark:bg-emerald-500 dark:text-slate-950 dark:border-emerald-500"
+                                  : "bg-white dark:bg-[#1C2218] text-slate-600 dark:text-slate-400 border-slate-200 dark:border-white/10"
+                              }`}
+                            >
+                              {m.l}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 

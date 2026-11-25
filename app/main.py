@@ -103,6 +103,9 @@ class PlannerSettingsInput(BaseModel):
     prefer_private_label: bool | None = None
     prefer_discounts_and_save_food: bool | None = None
     min_healthy_score: float | None = None
+    ai_recommendations_enabled: bool | None = None
+    ai_recommendation_count: int | None = None
+    ai_recommendation_meals: list[str] | None = None
 
 
 class TinderSessionCreateInput(BaseModel):

@@ -392,7 +392,7 @@ def test_couple_tinder_match_planner_settings_and_smart_restock(tmp_path: Path) 
     app = create_app(custom_settings=settings, enable_background=False)
 
     with TestClient(app) as client:
-        # 1. Planner Settings mentés & visszaolvasás
+        # 1. Planner Settings mentés & visszaolvasás (AI ajánlás ki/be + darabszám + kategória)
         upd = client.put(
             "/api/planner-settings",
             json={
@@ -401,6 +401,9 @@ def test_couple_tinder_match_planner_settings_and_smart_restock(tmp_path: Path) 
                 "prefer_private_label": True,
                 "prefer_discounts_and_save_food": True,
                 "min_healthy_score": 4.0,
+                "ai_recommendations_enabled": False,
+                "ai_recommendation_count": 3,
+                "ai_recommendation_meals": ["reggeli", "vacsora"],
             },
         )
         assert upd.status_code == 200
@@ -408,6 +411,9 @@ def test_couple_tinder_match_planner_settings_and_smart_restock(tmp_path: Path) 
         assert ps["weekly_budget_ft"] == 42000
         assert ps["allergens"] == ["laktóz", "glutén"]
         assert ps["min_healthy_score"] == 4.0
+        assert ps["ai_recommendations_enabled"] is False
+        assert ps["ai_recommendation_count"] == 3
+        assert ps["ai_recommendation_meals"] == ["reggeli", "vacsora"]
 
         # 2. Páros Kaja Tinder Match szoba (p1 + p2 -> IT'S A MATCH!)
         recipes = client.get("/api/recipes?category=ebed").json()

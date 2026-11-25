@@ -177,6 +177,9 @@ export interface PlannerSettings {
   prefer_private_label: boolean;
   prefer_discounts_and_save_food: boolean;
   min_healthy_score: number;
+  ai_recommendations_enabled: boolean;
+  ai_recommendation_count: number;
+  ai_recommendation_meals: string[];
 }
 
 export interface SmartRestockItem {

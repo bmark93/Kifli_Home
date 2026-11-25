@@ -206,7 +206,9 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
         description=(
             "Frissíti a heti tervező preferenciákat: weekly_budget_ft (0=nincs limit), "
             "allergens (pl. ['laktóz', 'glutén']), prefer_private_label (bool), "
-            "prefer_discounts_and_save_food (bool), min_healthy_score (1.0..5.0)."
+            "prefer_discounts_and_save_food (bool), min_healthy_score (1.0..5.0), "
+            "ai_recommendations_enabled (bool: random +N AI receptajánlás ki/be), "
+            "ai_recommendation_count (1..7 db), ai_recommendation_meals (['reggeli', 'ebed', 'vacsora'] részhalmaza)."
         )
     )
     def update_planner_settings(
@@ -215,6 +217,9 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
         prefer_private_label: bool | None = None,
         prefer_discounts_and_save_food: bool | None = None,
         min_healthy_score: float | None = None,
+        ai_recommendations_enabled: bool | None = None,
+        ai_recommendation_count: int | None = None,
+        ai_recommendation_meals: list[str] | None = None,
     ) -> dict[str, Any]:
         return db.update_planner_settings(
             {
@@ -223,6 +228,9 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
                 "prefer_private_label": prefer_private_label,
                 "prefer_discounts_and_save_food": prefer_discounts_and_save_food,
                 "min_healthy_score": min_healthy_score,
+                "ai_recommendations_enabled": ai_recommendations_enabled,
+                "ai_recommendation_count": ai_recommendation_count,
+                "ai_recommendation_meals": ai_recommendation_meals,
             }
         )
 

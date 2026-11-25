@@ -1064,6 +1064,9 @@ class Database:
         "prefer_private_label": True,  # Kifli sajátmárkák (Miil, Moddia, Yutto, Ubomi, Dacello, Kitchin)
         "prefer_discounts_and_save_food": True,  # Akciók & Mentsd meg az ételt előnyben
         "min_healthy_score": 3.4,  # Elvárt heti átlag Healthy Score
+        "ai_recommendations_enabled": True,  # Random +N új AI receptajánlás ki/be
+        "ai_recommendation_count": 1,  # Hány új AI ötlet (1..5)
+        "ai_recommendation_meals": ["ebed"],  # Miben: reggeli, ebed, vacsora
     }
 
     def get_planner_settings(self) -> dict[str, Any]:
@@ -1088,10 +1091,23 @@ class Database:
                     v = max(0, int(v))
                 elif k == "min_healthy_score":
                     v = max(1.0, min(5.0, round(float(v), 1)))
-                elif k in ("prefer_private_label", "prefer_discounts_and_save_food"):
+                elif k == "ai_recommendation_count":
+                    v = max(1, min(7, int(v)))
+                elif k in (
+                    "prefer_private_label",
+                    "prefer_discounts_and_save_food",
+                    "ai_recommendations_enabled",
+                ):
                     v = bool(v)
                 elif k == "allergens":
                     v = [str(a).strip().lower() for a in v if str(a).strip()]
+                elif k == "ai_recommendation_meals":
+                    cleaned = [
+                        strip_accents(str(m).strip().lower())
+                        for m in v
+                        if strip_accents(str(m).strip().lower()) in MEAL_TYPES
+                    ]
+                    v = cleaned or ["ebed"]
                 current[k] = v
                 conn.execute(
                     """
