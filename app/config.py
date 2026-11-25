@@ -31,6 +31,10 @@ class Settings:
     demo_daily_ai_limit: int
     server_fallback_daily_ai_limit: int
     auth_required: bool
+    google_client_id: str
+    google_client_secret: str
+    google_redirect_uri: str
+    allowed_google_emails: tuple[str, ...]
     data_dir: Path
     port: int
 
@@ -65,6 +69,11 @@ def load_settings() -> Settings:
         if part.isdigit():
             allowed_ids.append(int(part))
 
+    raw_google_emails = os.getenv("ALLOWED_GOOGLE_EMAILS", "").strip()
+    allowed_google = tuple(
+        e.strip().lower() for e in raw_google_emails.split(",") if e.strip()
+    )
+
     data_dir = Path(os.getenv("DATA_DIR", "./data")).resolve()
     data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -96,6 +105,10 @@ def load_settings() -> Settings:
         server_fallback_daily_ai_limit=int(os.getenv("SERVER_FALLBACK_DAILY_AI_LIMIT", "15")),
         auth_required=os.getenv("AUTH_REQUIRED", "true").strip().lower()
         not in ("0", "false", "no"),
+        google_client_id=os.getenv("GOOGLE_CLIENT_ID", "").strip(),
+        google_client_secret=os.getenv("GOOGLE_CLIENT_SECRET", "").strip(),
+        google_redirect_uri=os.getenv("GOOGLE_REDIRECT_URI", "").strip(),
+        allowed_google_emails=allowed_google,
         data_dir=data_dir,
         port=int(os.getenv("PORT", "8085")),
     )

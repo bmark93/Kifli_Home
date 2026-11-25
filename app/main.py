@@ -4,12 +4,15 @@ import hmac
 import json
 import logging
 import os
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
+import httpx
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.routing import Route
@@ -334,9 +337,134 @@ def create_app(
         return {
             "auth_required": settings.auth_required,
             "demo_mode_enabled": settings.demo_mode_enabled,
+            "google_login_enabled": bool(
+                settings.google_client_id and settings.google_client_secret
+            ),
             "invite_required": bool(settings.invite_code) and db.count_real_users() > 0,
             "has_registered_users": db.count_real_users() > 0,
         }
+
+    def _resolve_google_redirect_uri(request: Request) -> str:
+        if settings.google_redirect_uri:
+            return settings.google_redirect_uri
+        proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+        host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+        return f"{proto}://{host}/api/auth/google/callback"
+
+    @app.get("/api/auth/google/login")
+    async def google_oauth_login(request: Request) -> RedirectResponse:
+        if not settings.google_client_id or not settings.google_client_secret:
+            raise HTTPException(
+                status_code=400, detail="A Google bejelentkezés még nincs beállítva a .env-ben."
+            )
+        state = secrets.token_urlsafe(24)
+        redirect_uri = _resolve_google_redirect_uri(request)
+        params = urlencode(
+            {
+                "client_id": settings.google_client_id,
+                "redirect_uri": redirect_uri,
+                "response_type": "code",
+                "scope": "openid email profile",
+                "state": state,
+                "prompt": "select_account",
+            }
+        )
+        resp = RedirectResponse(
+            url=f"https://accounts.google.com/o/oauth2/v2/auth?{params}",
+            status_code=302,
+        )
+        is_https = (
+            request.url.scheme == "https"
+            or request.headers.get("x-forwarded-proto", "").lower() == "https"
+        )
+        resp.set_cookie(
+            key="kifli_google_state",
+            value=state,
+            max_age=600,
+            httponly=True,
+            samesite="lax",
+            secure=is_https,
+            path="/",
+        )
+        return resp
+
+    @app.get("/api/auth/google/callback")
+    async def google_oauth_callback(
+        request: Request,
+        code: str = "",
+        state: str = "",
+        error: str = "",
+    ) -> RedirectResponse:
+        def _err_redirect(msg: str) -> RedirectResponse:
+            r = RedirectResponse(url=f"/?{urlencode({'auth_error': msg})}", status_code=302)
+            r.delete_cookie("kifli_google_state", path="/")
+            return r
+
+        if error:
+            return _err_redirect(f"Google belépés megszakítva ({error}).")
+        expected_state = request.cookies.get("kifli_google_state", "")
+        if not state or not expected_state or not hmac.compare_digest(state, expected_state):
+            return _err_redirect("Lejárt vagy érvénytelen Google belépési munkamenet. Próbáld újra!")
+        if not code:
+            return _err_redirect("Hiányzó Google hitelesítési kód.")
+
+        redirect_uri = _resolve_google_redirect_uri(request)
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                tok_resp = await client.post(
+                    "https://oauth2.googleapis.com/token",
+                    data={
+                        "code": code,
+                        "client_id": settings.google_client_id,
+                        "client_secret": settings.google_client_secret,
+                        "redirect_uri": redirect_uri,
+                        "grant_type": "authorization_code",
+                    },
+                )
+                if tok_resp.status_code != 200:
+                    return _err_redirect("Google token csere sikertelen (ellenőrizd a Redirect URI-t!).")
+                access_token = tok_resp.json().get("access_token", "")
+                info_resp = await client.get(
+                    "https://openidconnect.googleapis.com/v1/userinfo",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+                if info_resp.status_code != 200:
+                    return _err_redirect("Nem sikerült lekérni a Google profil adatait.")
+                profile = info_resp.json()
+        except Exception as exc:
+            logging.getLogger("kifli_otthon.auth").warning("Google OAuth hiba: %s", exc)
+            return _err_redirect("Hálózati hiba a Google bejelentkezés közben.")
+
+        email = str(profile.get("email") or "").strip().lower()
+        if not email or profile.get("email_verified") is False:
+            return _err_redirect("Csak megerősített Google e-mail címmel lehet belépni.")
+
+        if settings.allowed_google_emails and email not in settings.allowed_google_emails:
+            return _err_redirect("Ez a Google e-mail cím nincs engedélyezve ezen a szerveren.")
+
+        user = db.get_user_by_email(email)
+        if not user:
+            is_first_real_user = db.count_real_users() == 0
+            force_id = 1 if (is_first_real_user and db.get_user_by_id(1) is None) else None
+            mcp_tok = (
+                settings.mcp_access_token
+                if (force_id == 1 and settings.mcp_access_token)
+                else generate_personal_mcp_token()
+            )
+            user = db.create_user(
+                email=email,
+                display_name=str(profile.get("name") or email.split("@")[0]),
+                password_hash=hash_password(secrets.token_urlsafe(32)),
+                is_admin=is_first_real_user,
+                is_demo=False,
+                mcp_token=mcp_tok,
+                force_id=force_id,
+            )
+
+        resp = RedirectResponse(url="/", status_code=302)
+        resp.delete_cookie("kifli_google_state", path="/")
+        _set_session_cookie(resp, int(user["id"]), request)
+        return resp
 
     @app.get("/api/auth/me")
     async def auth_me(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:

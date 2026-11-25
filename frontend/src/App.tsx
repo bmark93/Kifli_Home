@@ -126,6 +126,7 @@ export default function App() {
   const [authConfig, setAuthConfig] = useState<AuthConfig>({
     auth_required: true,
     demo_mode_enabled: true,
+    google_login_enabled: false,
     invite_required: false,
     has_registered_users: true,
   });

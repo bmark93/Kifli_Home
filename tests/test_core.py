@@ -16,6 +16,8 @@ def _make_settings(
     mcp_token: str = "",
     auth_required: bool = False,
     invite_code: str = "",
+    google_client_id: str = "",
+    google_client_secret: str = "",
 ) -> Settings:
     return Settings(
         llm_provider="gemini",
@@ -38,6 +40,10 @@ def _make_settings(
         demo_daily_ai_limit=3,
         server_fallback_daily_ai_limit=5,
         auth_required=auth_required,
+        google_client_id=google_client_id,
+        google_client_secret=google_client_secret,
+        google_redirect_uri="",
+        allowed_google_emails=(),
         data_dir=tmp_path,
         port=8085,
     )
@@ -656,3 +662,31 @@ def test_multi_user_auth_isolation_byok_and_demo_sandbox(tmp_path: Path) -> None
             assert False, "Elvártuk a napi AI limit hibát!"
         except RuntimeError as exc:
             assert "napi 3" in str(exc).lower()
+
+
+def test_google_oauth_login_redirect_and_csrf_state(tmp_path: Path) -> None:
+    settings = _make_settings(
+        tmp_path,
+        auth_required=True,
+        google_client_id="demo-google-client-id.apps.googleusercontent.com",
+        google_client_secret="demo-google-secret",
+    )
+    app = create_app(custom_settings=settings, enable_background=False)
+    with TestClient(app) as client:
+        cfg = client.get("/api/auth/config").json()
+        assert cfg["google_login_enabled"] is True
+
+        # Redirect Google felé + CSRF state cookie beállítva
+        r = client.get("/api/auth/google/login", follow_redirects=False)
+        assert r.status_code == 302
+        loc = r.headers["location"]
+        assert "accounts.google.com/o/oauth2/v2/auth" in loc
+        assert "demo-google-client-id.apps.googleusercontent.com" in loc
+        assert "kifli_google_state" in r.cookies
+
+        # Rossz state-tel visszairányít hibaüzenettel (CSRF védelem!)
+        bad_cb = client.get(
+            "/api/auth/google/callback?code=abc&state=ROSSZ", follow_redirects=False
+        )
+        assert bad_cb.status_code == 302
+        assert "auth_error=" in bad_cb.headers["location"]

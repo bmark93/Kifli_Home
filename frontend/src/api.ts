@@ -1,6 +1,7 @@
 export interface AuthConfig {
   auth_required: boolean;
   demo_mode_enabled: boolean;
+  google_login_enabled: boolean;
   invite_required: boolean;
   has_registered_users: boolean;
 }

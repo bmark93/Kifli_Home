@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   Sparkles,
   Flame,
@@ -29,6 +29,15 @@ export function LoginView({ config, theme, onToggleTheme, onAuthenticated }: Pro
   const [inviteCode, setInviteCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const authErr = params.get("auth_error");
+    if (authErr) {
+      setError(authErr);
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, []);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -143,8 +152,43 @@ export function LoginView({ config, theme, onToggleTheme, onAuthenticated }: Pro
           )}
         </div>
 
-        {/* Jobb: Login / Regisztráció űrlap */}
+        {/* Jobb: Google + Login / Regisztráció űrlap */}
         <div className="lg:col-span-6 rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/90 dark:border-white/10 p-6 sm:p-7 shadow-xl space-y-5">
+          {config.google_login_enabled && (
+            <>
+              <a
+                href="/api/auth/google/login"
+                className="w-full py-3.5 px-4 rounded-2xl bg-white hover:bg-slate-50 dark:bg-[#121510] dark:hover:bg-white/5 text-slate-800 dark:text-white font-bold text-sm border border-slate-300 dark:border-white/15 shadow-sm flex items-center justify-center gap-3 transition"
+              >
+                <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    fill="#4285F4"
+                    d="M23.49 12.27c0-.79-.07-1.54-.2-2.27H12v4.3h6.46a5.52 5.52 0 0 1-2.4 3.62v3h3.88c2.27-2.09 3.55-5.17 3.55-8.65z"
+                  />
+                  <path
+                    fill="#34A853"
+                    d="M12 24c3.24 0 5.95-1.07 7.94-2.9l-3.88-3c-1.07.72-2.45 1.15-4.06 1.15-3.12 0-5.77-2.11-6.72-4.95H1.28v3.1A12 12 0 0 0 12 24z"
+                  />
+                  <path
+                    fill="#FBBC05"
+                    d="M5.28 14.3a7.18 7.18 0 0 1 0-4.6V6.6H1.28a12 12 0 0 0 0 10.8l4-3.1z"
+                  />
+                  <path
+                    fill="#EA4335"
+                    d="M12 4.75c1.76 0 3.34.61 4.58 1.8l3.44-3.44C17.95 1.19 15.24 0 12 0A12 12 0 0 0 1.28 6.6l4 3.1c.95-2.84 3.6-4.95 6.72-4.95z"
+                  />
+                </svg>
+                <span>Folytatás Google-fiókkal</span>
+              </a>
+
+              <div className="relative flex items-center">
+                <div className="flex-grow border-t border-slate-200 dark:border-white/10" />
+                <span className="px-3 text-xs text-slate-400">vagy e-mail címmel</span>
+                <div className="flex-grow border-t border-slate-200 dark:border-white/10" />
+              </div>
+            </>
+          )}
+
           {/* Tab váltó */}
           <div className="grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-slate-100 dark:bg-[#121510]">
             <button
