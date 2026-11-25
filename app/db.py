@@ -807,10 +807,10 @@ class Database:
             target_owner_id = int(target["household_owner_id"] or target["id"])
             if target_owner_id == int(user_id):
                 raise ValueError("Ez a saját háztartásod kódja!")
-            # Ha már csatlakoztak hozzánk, ők is maradjanak tisztán leválasztva vagy költözzenek át
+            # Ha már csatlakoztak hozzánk, ők is költözzenek át az új közös tulajdonos alá (ne legyen 2-szintű lánc!)
             conn.execute(
-                "UPDATE users SET household_owner_id = ? WHERE id = ?",
-                (target_owner_id, int(user_id)),
+                "UPDATE users SET household_owner_id = ? WHERE id = ? OR household_owner_id = ?",
+                (target_owner_id, int(user_id), int(user_id)),
             )
         return self.get_household_info(user_id)
 

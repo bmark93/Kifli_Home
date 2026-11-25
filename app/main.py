@@ -12,6 +12,7 @@ from urllib.parse import urlencode
 
 import httpx
 from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -253,6 +254,7 @@ def create_app(
                     await runtime.stop()
 
     app = FastAPI(title="kifli.otthon — Multi-User Menü & Bevásárló Asszisztens", lifespan=lifespan)
+    app.add_middleware(GZipMiddleware, minimum_size=500)
     app.state.settings = settings
     app.state.db = db
     app.state.kifli = default_kifli
