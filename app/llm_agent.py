@@ -496,15 +496,53 @@ class ChefShoppingAgent:
         self, name: str, args: dict[str, Any], user_id: int = 1
     ) -> Any:
         if name == "list_saved_recipes":
-            return self.db.list_recipes(category=args.get("category"), user_id=user_id)
+            # Token-optimalizálás: az AI menütervezőnek nincs szüksége image_url-re vagy hosszú főzési leírásra
+            raw = self.db.list_recipes(category=args.get("category"), user_id=user_id)
+            return [
+                {
+                    "id": r["id"],
+                    "title": r["title"],
+                    "categories": r["categories"],
+                    "servings": r["servings"],
+                    "healthy_score": r["healthy_score"],
+                    "kcal_per_serving": r["kcal_per_serving"],
+                    "protein_g": r["protein_g"],
+                    "carbs_g": r["carbs_g"],
+                    "fat_g": r["fat_g"],
+                    "ingredients": [
+                        {"name": i["name"], "quantity": i["quantity"], "unit": i["unit"]}
+                        for i in r.get("ingredients", [])
+                    ],
+                }
+                for r in raw
+            ]
 
         if name == "list_community_public_recipes":
-            return self.db.list_community_recipes(
+            raw_comm = self.db.list_community_recipes(
                 category=args.get("category"),
                 search=args.get("search") or "",
                 viewer_user_id=user_id,
                 limit=40,
             )
+            return [
+                {
+                    "id": r["id"],
+                    "title": r["title"],
+                    "author_name": r.get("author_name", ""),
+                    "categories": r["categories"],
+                    "servings": r["servings"],
+                    "healthy_score": r["healthy_score"],
+                    "kcal_per_serving": r["kcal_per_serving"],
+                    "protein_g": r["protein_g"],
+                    "carbs_g": r["carbs_g"],
+                    "fat_g": r["fat_g"],
+                    "ingredients": [
+                        {"name": i["name"], "quantity": i["quantity"], "unit": i["unit"]}
+                        for i in r.get("ingredients", [])
+                    ],
+                }
+                for r in raw_comm
+            ]
 
         if name == "save_recipe_to_db":
             return self.db.create_or_update_recipe(

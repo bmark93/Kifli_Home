@@ -284,6 +284,8 @@ export default function App() {
   }
 
   // Kifli OAuth, Kamra, Tervező preferenciák & Smart Restock
+  const [kifliGuideOpen, setKifliGuideOpen] = useState<boolean>(false);
+  const [kifliConnecting, setKifliConnecting] = useState<boolean>(false);
   const [loginUrl, setLoginUrl] = useState<string>("");
   const [callbackUrl, setCallbackUrl] = useState<string>("");
   const [newStaple, setNewStaple] = useState<string>("");
@@ -3036,20 +3038,25 @@ export default function App() {
 
                 <div className="flex flex-wrap gap-2.5">
                   <button
-                    onClick={async () => {
-                      const res = await apiFetch<{ login_url: string }>("/api/kifli/login", {
-                        method: "POST",
-                      });
-                      setLoginUrl(res.login_url);
-                      window.open(res.login_url, "_blank");
+                    type="button"
+                    onClick={() => {
+                      if (currentUser?.is_demo) {
+                        notify(
+                          "Demo módban szimulált Kifli kosár fut. Saját Kifli.hu fiók összekapcsolásához regisztrálj saját fiókot!",
+                          "err"
+                        );
+                        return;
+                      }
+                      setKifliGuideOpen(true);
                     }}
-                    className="px-4 py-2.5 rounded-2xl bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950 font-bold text-xs"
+                    className="px-4 py-2.5 rounded-2xl bg-[#6FA014] hover:bg-[#5C870E] text-white font-bold text-xs shadow-sm"
                   >
-                    {status?.kifli.authenticated ? "Újracsatlakozás" : "1. Belépés a Kifli.hu-ra"}
+                    {status?.kifli.authenticated ? "Újracsatlakozás a Kifli.hu-hoz" : "Kifli.hu fiók összekapcsolása"}
                   </button>
 
                   {status?.kifli.authenticated && (
                     <button
+                      type="button"
                       onClick={async () => {
                         await apiFetch("/api/kifli/logout", { method: "POST" });
                         await loadCore();
@@ -4140,6 +4147,128 @@ export default function App() {
               {editingRecipeId !== null ? "Módosítások mentése" : "Recept mentése"}
             </button>
           </form>
+        </div>
+      )}
+
+      {/* MODAL: KIFLI.HU FIÓK ÖSSZEKAPCSOLÁSA — ÉRTHETŐ LÉPÉSRŐL LÉPÉSRE ÚTMUTATÓ */}
+      {kifliGuideOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/65 dark:bg-black/80 backdrop-blur-sm flex items-end sm:items-center justify-center p-0 sm:p-4">
+          <div className="w-full max-w-lg rounded-t-3xl sm:rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200 dark:border-white/10 p-5 sm:p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-10 h-10 rounded-2xl bg-[#6FA014]/15 text-[#47690C] dark:text-[#A3E635] flex items-center justify-center shrink-0">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-base text-slate-900 dark:text-white">
+                    Kifli.hu fiók összekapcsolása
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    Egyszeri, ~1 perces lépés — utána magától megújul!
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setKifliGuideOpen(false)}
+                className="p-1.5 rounded-full bg-slate-100 dark:bg-white/5 text-slate-500 dark:text-slate-400"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="rounded-2xl bg-[#F6F6F2] dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-4 space-y-3 text-xs text-slate-700 dark:text-slate-200 leading-relaxed">
+              <p className="font-bold text-slate-900 dark:text-white">
+                Miért kell a végén egy <code>localhost</code> linket bemásolni?
+              </p>
+              <ol className="space-y-2 list-decimal list-inside">
+                <li>
+                  Az alábbi gombra kattintva megnyílik a hivatalos <strong>Kifli.hu</strong> bejelentkezési oldal. A jelszavadat ez az alkalmazás <strong>soha nem látja és nem tárolja</strong>.
+                </li>
+                <li>
+                  Belépés után a Kifli.hu biztonsági szabályzata csak egy helyi <code>http://localhost:3334/oauth/callback?code=...</code> címre enged visszairányítani — ezért <strong>teljesen normális, ha a böngésző ekkor „Az oldal nem elérhető” hibát ír ki!</strong>
+                </li>
+                <li>
+                  Ne ijedj meg tőle: csak <strong>másold ki a böngésző címsorából a teljes linket</strong> (amiben benne van a <code>?code=...</code> rész), és illeszd be ide alulra.
+                </li>
+                <li>
+                  Ezután a kapcsolat él, és a rendszer a háttérben <strong>automatikusan megújítja</strong> a munkamenetet, így nem kell újra csinálnod.
+                </li>
+              </ol>
+            </div>
+
+            <button
+              type="button"
+              disabled={kifliConnecting}
+              onClick={async () => {
+                setKifliConnecting(true);
+                try {
+                  const res = await apiFetch<{ login_url: string }>("/api/kifli/login", {
+                    method: "POST",
+                  });
+                  setLoginUrl(res.login_url);
+                  window.open(res.login_url, "_blank");
+                } catch (err: any) {
+                  notify(err.message || "Nem sikerült elindítani a Kifli.hu belépést.", "err");
+                } finally {
+                  setKifliConnecting(false);
+                }
+              }}
+              className="w-full py-3 rounded-2xl bg-[#6FA014] hover:bg-[#5C870E] text-white font-extrabold text-sm shadow-lg shadow-[#6FA014]/25 disabled:opacity-50 transition"
+            >
+              {kifliConnecting
+                ? "Kifli.hu oldal előkészítése..."
+                : loginUrl
+                ? "Kifli.hu belépési oldal újranyitása →"
+                : "Értem, induljon a Kifli.hu belépés →"}
+            </button>
+
+            {loginUrl && (
+              <form
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  setKifliConnecting(true);
+                  try {
+                    await apiFetch("/api/kifli/callback", {
+                      method: "POST",
+                      body: JSON.stringify({ callback_url: callbackUrl }),
+                    });
+                    setLoginUrl("");
+                    setCallbackUrl("");
+                    setKifliGuideOpen(false);
+                    await loadCore();
+                    notify("✅ Kifli.hu fiók sikeresen összekapcsolva!");
+                  } catch (err: any) {
+                    notify(err.message || "Hibás vagy lejárt link.", "err");
+                  } finally {
+                    setKifliConnecting(false);
+                  }
+                }}
+                className="space-y-2.5 pt-3 border-t border-slate-200 dark:border-white/10"
+              >
+                <label className="block text-xs font-bold text-slate-800 dark:text-white">
+                  2. Illeszd be ide a böngésző címsorából másolt <code>localhost:3334</code> linket:
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={callbackUrl}
+                    onChange={(e) => setCallbackUrl(e.target.value)}
+                    placeholder="http://localhost:3334/oauth/callback?code=..."
+                    className="flex-1 bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white rounded-xl px-3 py-2.5 text-xs border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#6FA014]"
+                    required
+                  />
+                  <button
+                    type="submit"
+                    disabled={kifliConnecting || !callbackUrl.trim()}
+                    className="px-4 py-2.5 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-950 font-extrabold text-xs disabled:opacity-40"
+                  >
+                    Összekapcsolás
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
         </div>
       )}
 

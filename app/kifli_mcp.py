@@ -365,10 +365,11 @@ class KifliMCPManager:
         if not self._callback_future or self._callback_future.done():
             raise RuntimeError("Nincs folyamatban lévő Kifli belépés. Kattints először a Belépés indítására!")
 
-        raw = callback_url_or_code.strip()
+        raw = callback_url_or_code.strip().strip('"').strip("'")
         iss: str | None = None
-        if "://" in raw or raw.startswith("?"):
-            parsed = urlsplit(raw)
+        if "://" in raw or raw.startswith("?") or "code=" in raw:
+            norm = raw if ("://" in raw or raw.startswith("?")) else f"http://{raw}"
+            parsed = urlsplit(norm)
             qs = parse_qs(parsed.query)
             code_list = qs.get("code")
             if not code_list:
