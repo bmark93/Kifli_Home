@@ -118,6 +118,9 @@ def detect_diet_requirements(ingredient_name: str, active_allergens: list[str]) 
 
 class Database:
     DEFAULT_PLANNER_SETTINGS: dict[str, Any] = {
+        "household_size": 2,
+        "plan_days": 7,
+        "days_per_meal": 2,
         "weekly_budget_ft": 0,
         "allergens": [],
         "prefer_private_label": True,
@@ -187,6 +190,10 @@ class Database:
                     source_url TEXT NOT NULL DEFAULT '',
                     image_url TEXT NOT NULL DEFAULT '',
                     healthy_score INTEGER NOT NULL DEFAULT 3,
+                    kcal_per_serving INTEGER NOT NULL DEFAULT 0,
+                    protein_g REAL NOT NULL DEFAULT 0,
+                    carbs_g REAL NOT NULL DEFAULT 0,
+                    fat_g REAL NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT (datetime('now'))
                 );
 
@@ -308,6 +315,14 @@ class Database:
             conn.execute("ALTER TABLE recipes ADD COLUMN image_url TEXT NOT NULL DEFAULT ''")
         if "healthy_score" not in recipe_cols:
             conn.execute("ALTER TABLE recipes ADD COLUMN healthy_score INTEGER NOT NULL DEFAULT 3")
+        if "kcal_per_serving" not in recipe_cols:
+            conn.execute("ALTER TABLE recipes ADD COLUMN kcal_per_serving INTEGER NOT NULL DEFAULT 0")
+        if "protein_g" not in recipe_cols:
+            conn.execute("ALTER TABLE recipes ADD COLUMN protein_g REAL NOT NULL DEFAULT 0")
+        if "carbs_g" not in recipe_cols:
+            conn.execute("ALTER TABLE recipes ADD COLUMN carbs_g REAL NOT NULL DEFAULT 0")
+        if "fat_g" not in recipe_cols:
+            conn.execute("ALTER TABLE recipes ADD COLUMN fat_g REAL NOT NULL DEFAULT 0")
         if "user_id" not in recipe_cols:
             conn.execute("ALTER TABLE recipes ADD COLUMN user_id INTEGER NOT NULL DEFAULT 1")
 
@@ -429,6 +444,10 @@ class Database:
                 "categories": ["reggeli"],
                 "servings": 2,
                 "healthy_score": 5,
+                "kcal_per_serving": 390,
+                "protein_g": 12.0,
+                "carbs_g": 68.0,
+                "fat_g": 7.0,
                 "instructions": "A zabpelyhet tejjel felfőzzük, tetejére karikázott banán és friss áfonya kerül.",
                 "ingredients": [
                     {"name": "zabpehely", "quantity": 120, "unit": "g", "is_staple": False},
@@ -442,6 +461,10 @@ class Database:
                 "categories": ["reggeli", "vacsora"],
                 "servings": 2,
                 "healthy_score": 4,
+                "kcal_per_serving": 480,
+                "protein_g": 34.0,
+                "carbs_g": 26.0,
+                "fat_g": 26.0,
                 "instructions": "4-5 tojásból lágy rántotta, pirított kovászos kenyérrel.",
                 "ingredients": [
                     {"name": "tojás", "quantity": 5, "unit": "db", "is_staple": False},
@@ -456,6 +479,10 @@ class Database:
                 "categories": ["ebed"],
                 "servings": 4,
                 "healthy_score": 3,
+                "kcal_per_serving": 640,
+                "protein_g": 46.0,
+                "carbs_g": 58.0,
+                "fat_g": 23.0,
                 "instructions": "Klasszikus tejfölös csirkepaprikás házi vagy kész nokedlivel.",
                 "ingredients": [
                     {"name": "csirkemell vagy csirkecomb filé", "quantity": 800, "unit": "g", "is_staple": False},
@@ -471,6 +498,10 @@ class Database:
                 "categories": ["ebed", "vacsora"],
                 "servings": 4,
                 "healthy_score": 3,
+                "kcal_per_serving": 690,
+                "protein_g": 38.0,
+                "carbs_g": 74.0,
+                "fat_g": 25.0,
                 "instructions": "Darált marhahúsos paradicsomos ragu spagettivel és reszelt parmezánnal.",
                 "ingredients": [
                     {"name": "darált marhahús", "quantity": 500, "unit": "g", "is_staple": False},
@@ -485,6 +516,10 @@ class Database:
                 "categories": ["vacsora", "ebed"],
                 "servings": 2,
                 "healthy_score": 5,
+                "kcal_per_serving": 460,
+                "protein_g": 44.0,
+                "carbs_g": 14.0,
+                "fat_g": 24.0,
                 "instructions": "Ropogós római saláta pirított csirkemellcsíkokkal és parmezánnal.",
                 "ingredients": [
                     {"name": "római saláta", "quantity": 1, "unit": "db", "is_staple": False},
@@ -498,8 +533,8 @@ class Database:
         for r in starters:
             cur = conn.execute(
                 """
-                INSERT INTO recipes (user_id, title, categories_json, servings, instructions, healthy_score)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO recipes (user_id, title, categories_json, servings, instructions, healthy_score, kcal_per_serving, protein_g, carbs_g, fat_g)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     user_id,
@@ -508,6 +543,10 @@ class Database:
                     r["servings"],
                     r["instructions"],
                     r["healthy_score"],
+                    r["kcal_per_serving"],
+                    r["protein_g"],
+                    r["carbs_g"],
+                    r["fat_g"],
                 ),
             )
             recipe_id = int(cur.lastrowid)
@@ -758,6 +797,10 @@ class Database:
                         "source_url": row["source_url"],
                         "image_url": row["image_url"] or "",
                         "healthy_score": max(1, min(5, int(row["healthy_score"] or 3))),
+                        "kcal_per_serving": max(0, int(row["kcal_per_serving"] or 0)),
+                        "protein_g": round(max(0.0, float(row["protein_g"] or 0)), 1),
+                        "carbs_g": round(max(0.0, float(row["carbs_g"] or 0)), 1),
+                        "fat_g": round(max(0.0, float(row["fat_g"] or 0)), 1),
                         "ingredients": [
                             {
                                 "id": i["id"],
@@ -784,6 +827,10 @@ class Database:
         recipe_id: int | None = None,
         image_url: str | None = None,
         healthy_score: int = 3,
+        kcal_per_serving: int | None = None,
+        protein_g: float | None = None,
+        carbs_g: float | None = None,
+        fat_g: float | None = None,
         user_id: int = 1,
     ) -> dict[str, Any]:
         valid_cats = [c for c in categories if c in MEAL_TYPES] or ["ebed"]
@@ -792,17 +839,38 @@ class Database:
         with self.connect() as conn:
             if recipe_id is not None:
                 prev = conn.execute(
-                    "SELECT image_url FROM recipes WHERE id = ? AND user_id = ?",
+                    "SELECT image_url, kcal_per_serving, protein_g, carbs_g, fat_g FROM recipes WHERE id = ? AND user_id = ?",
                     (recipe_id, int(user_id)),
                 ).fetchone()
                 if not prev:
                     raise ValueError(f"Nem található recept ezzel az ID-val: {recipe_id}")
                 final_image_url = prev["image_url"] if image_url is None else image_url.strip()
+                final_kcal = (
+                    int(prev["kcal_per_serving"] or 0)
+                    if kcal_per_serving is None
+                    else max(0, int(kcal_per_serving))
+                )
+                final_protein = (
+                    float(prev["protein_g"] or 0)
+                    if protein_g is None
+                    else round(max(0.0, float(protein_g)), 1)
+                )
+                final_carbs = (
+                    float(prev["carbs_g"] or 0)
+                    if carbs_g is None
+                    else round(max(0.0, float(carbs_g)), 1)
+                )
+                final_fat = (
+                    float(prev["fat_g"] or 0)
+                    if fat_g is None
+                    else round(max(0.0, float(fat_g)), 1)
+                )
 
                 conn.execute(
                     """
                     UPDATE recipes
-                    SET title = ?, categories_json = ?, servings = ?, instructions = ?, source_url = ?, image_url = ?, healthy_score = ?
+                    SET title = ?, categories_json = ?, servings = ?, instructions = ?, source_url = ?,
+                        image_url = ?, healthy_score = ?, kcal_per_serving = ?, protein_g = ?, carbs_g = ?, fat_g = ?
                     WHERE id = ? AND user_id = ?
                     """,
                     (
@@ -813,6 +881,10 @@ class Database:
                         source_url.strip(),
                         final_image_url,
                         clamped_score,
+                        final_kcal,
+                        final_protein,
+                        final_carbs,
+                        final_fat,
                         recipe_id,
                         int(user_id),
                     ),
@@ -822,8 +894,8 @@ class Database:
             else:
                 cur = conn.execute(
                     """
-                    INSERT INTO recipes (user_id, title, categories_json, servings, instructions, source_url, image_url, healthy_score)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO recipes (user_id, title, categories_json, servings, instructions, source_url, image_url, healthy_score, kcal_per_serving, protein_g, carbs_g, fat_g)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         int(user_id),
@@ -834,6 +906,10 @@ class Database:
                         source_url.strip(),
                         (image_url or "").strip(),
                         clamped_score,
+                        max(0, int(kcal_per_serving or 0)),
+                        round(max(0.0, float(protein_g or 0)), 1),
+                        round(max(0.0, float(carbs_g or 0)), 1),
+                        round(max(0.0, float(fat_g or 0)), 1),
                     ),
                 )
                 rid = int(cur.lastrowid)
@@ -878,6 +954,35 @@ class Database:
             cur = conn.execute(
                 "UPDATE recipes SET healthy_score = ? WHERE id = ? AND user_id = ?",
                 (clamped, int(recipe_id), int(user_id)),
+            )
+            if cur.rowcount == 0:
+                raise ValueError(f"Nem található recept ezzel az ID-val: {recipe_id}")
+        return [r for r in self.list_recipes(user_id=user_id) if r["id"] == int(recipe_id)][0]
+
+    def set_recipe_macros(
+        self,
+        recipe_id: int,
+        kcal_per_serving: int,
+        protein_g: float,
+        carbs_g: float,
+        fat_g: float,
+        user_id: int = 1,
+    ) -> dict[str, Any]:
+        with self.connect() as conn:
+            cur = conn.execute(
+                """
+                UPDATE recipes
+                SET kcal_per_serving = ?, protein_g = ?, carbs_g = ?, fat_g = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (
+                    max(0, int(kcal_per_serving)),
+                    round(max(0.0, float(protein_g)), 1),
+                    round(max(0.0, float(carbs_g)), 1),
+                    round(max(0.0, float(fat_g)), 1),
+                    int(recipe_id),
+                    int(user_id),
+                ),
             )
             if cur.rowcount == 0:
                 raise ValueError(f"Nem található recept ezzel az ID-val: {recipe_id}")
@@ -1367,27 +1472,37 @@ class Database:
                     merged[bucket_key]["used_in"].append(origin)
 
         if plan:
-            last_batch_cooked: dict[str, tuple[str, int]] = {}
-            for day_idx, (day_code, day_label) in enumerate(DAYS_HU):
+            household_size = max(1, int(planner_prefs.get("household_size", 2) or 2))
+            plan_days_count = max(1, min(7, int(planner_prefs.get("plan_days", 7) or 7)))
+            days_per_meal = max(1, min(4, int(planner_prefs.get("days_per_meal", 2) or 2)))
+            active_days = DAYS_HU[:plan_days_count]
+
+            # Batch-cooking követés: (title_key, start_day_idx, remaining_covered_days)
+            batch_state: dict[str, tuple[str, int, int]] = {}
+            for day_idx, (day_code, day_label) in enumerate(active_days):
                 day_slots = plan["days"].get(day_code, {})
                 for meal_code in MEAL_TYPES:
                     slot = day_slots.get(meal_code)
                     if not slot:
-                        last_batch_cooked.pop(meal_code, None)
+                        batch_state.pop(meal_code, None)
                         continue
                     rid = slot.get("recipe_id")
                     title_key = str(rid) if rid else normalize_key(slot.get("title", ""))
                     rec_obj = recipes_by_id.get(rid) if rid else None
-                    servings = int(rec_obj["servings"]) if rec_obj else 2
+                    servings = max(1, int(rec_obj["servings"])) if rec_obj else household_size
 
-                    if meal_code in ("ebed", "vacsora") and servings >= 4:
-                        prev = last_batch_cooked.get(meal_code)
-                        if prev and prev[0] == title_key and prev[1] == day_idx - 1:
-                            last_batch_cooked.pop(meal_code, None)
+                    # Ha a recept adagszáma legalább 2x a háztartás mérete és days_per_meal > 1
+                    covered_days = min(days_per_meal, max(1, servings // household_size))
+                    if meal_code in ("ebed", "vacsora") and days_per_meal > 1 and covered_days > 1:
+                        prev = batch_state.get(meal_code)
+                        if prev and prev[0] == title_key and prev[1] == day_idx - 1 and prev[2] > 0:
+                            batch_state[meal_code] = (title_key, day_idx, prev[2] - 1)
                             continue
-                        last_batch_cooked[meal_code] = (title_key, day_idx)
+                        batch_state[meal_code] = (title_key, day_idx, covered_days - 1)
+                        qty_scale = 1.0
                     else:
-                        last_batch_cooked.pop(meal_code, None)
+                        batch_state.pop(meal_code, None)
+                        qty_scale = round(household_size / servings, 2) if rec_obj else 1.0
 
                     origin_label = f"{day_label} {meal_code}: {slot.get('title', '')}"
                     custom_ings = slot.get("custom_ingredients") or []
@@ -1395,7 +1510,7 @@ class Database:
                         for ing in rec_obj["ingredients"]:
                             _accumulate(
                                 ing["name"],
-                                ing["quantity"],
+                                round(float(ing["quantity"]) * qty_scale, 2),
                                 ing["unit"],
                                 bool(ing["is_staple"]),
                                 ing.get("brand_hint", ""),
@@ -1510,6 +1625,12 @@ class Database:
                     continue
                 if k == "weekly_budget_ft":
                     v = max(0, int(v))
+                elif k == "household_size":
+                    v = max(1, min(12, int(v)))
+                elif k == "plan_days":
+                    v = max(1, min(7, int(v)))
+                elif k == "days_per_meal":
+                    v = max(1, min(4, int(v)))
                 elif k == "min_healthy_score":
                     v = max(1.0, min(5.0, round(float(v), 1)))
                 elif k == "ai_recommendation_count":
@@ -1581,6 +1702,7 @@ class Database:
             ).fetchall()
 
         owner_uid = int(sess["owner_user_id"])
+        meal_type = str(sess["meal_type"] or "ebed")
         p1_likes: set[int] = set()
         p2_likes: set[int] = set()
         p1_swiped: list[int] = []
@@ -1596,20 +1718,26 @@ class Database:
                 if s["decision"] == "like":
                     p2_likes.add(rid)
 
+        owner_recipes = self.list_recipes(user_id=owner_uid)
+        deck_recipes = [r for r in owner_recipes if meal_type in r["categories"]]
+        if not deck_recipes:
+            deck_recipes = owner_recipes
+
         matched_ids = sorted(p1_likes.intersection(p2_likes))
-        recipes_by_id = {r["id"]: r for r in self.list_recipes(user_id=owner_uid)}
+        recipes_by_id = {r["id"]: r for r in owner_recipes}
         matched_recipes = [recipes_by_id[rid] for rid in matched_ids if rid in recipes_by_id]
 
         return {
             "code": sess["code"],
             "owner_user_id": owner_uid,
-            "meal_type": sess["meal_type"],
+            "meal_type": meal_type,
             "target_days": json.loads(sess["target_days_json"]),
             "created_at": sess["created_at"],
             "p1_swiped_ids": p1_swiped,
             "p2_swiped_ids": p2_swiped,
             "p1_like_count": len(p1_likes),
             "p2_like_count": len(p2_likes),
+            "deck_recipes": deck_recipes,
             "matches": matched_recipes,
         }
 

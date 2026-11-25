@@ -90,6 +90,10 @@ LOCAL_TOOLS_SPEC: list[dict[str, Any]] = [
                         "type": "integer",
                         "description": "Egészségességi pontszám 1 (nehéz/bűnözős) és 5 (szuper-egészséges) között",
                     },
+                    "kcal_per_serving": {"type": "integer", "description": "Becsült kalória / adag (kcal)"},
+                    "protein_g": {"type": "number", "description": "Fehérje / adag (g)"},
+                    "carbs_g": {"type": "number", "description": "Szénhidrát / adag (g)"},
+                    "fat_g": {"type": "number", "description": "Zsír / adag (g)"},
                     "instructions": {"type": "string", "description": "Rövid elkészítési leírás"},
                     "ingredients": {
                         "type": "array",
@@ -483,6 +487,10 @@ class ChefShoppingAgent:
                 servings=int(args.get("servings", 2)),
                 instructions=args.get("instructions", ""),
                 healthy_score=int(args.get("healthy_score", 3) or 3),
+                kcal_per_serving=args.get("kcal_per_serving"),
+                protein_g=args.get("protein_g"),
+                carbs_g=args.get("carbs_g"),
+                fat_g=args.get("fat_g"),
                 user_id=user_id,
             )
 
@@ -576,6 +584,22 @@ class ChefShoppingAgent:
         kifli_client: KifliMCPManager | None = None,
         is_demo: bool = False,
     ) -> str:
+        llm_cfg = self.resolve_llm_config_for_user(user_id=user_id)
+        if is_demo and not llm_cfg["using_own_key"]:
+            self.db.add_chat_message("user", user_message, source=source, user_id=user_id)
+            demo_reply = (
+                "👋 **Demo módban az AI séf csak előnézetben fut (0 API költséggel).**\n\n"
+                "Ha saját fiókkal belépsz (Google-fiókkal vagy e-maillel) és a **⚙️ Kamra → Saját AI API Kulcs** "
+                "résznél megadod a saját Gemini vagy OpenAI kulcsodat (~30–150 Ft/hó), akkor itt élőben "
+                "tudsz velem beszélgetni, heti menüt generálni és 1 kattintással összeállítani a valódi Kifli.hu kosaradat!\n\n"
+                "**Addig is próbáld ki bátran az élő, 0 AI-tokenes funkciókat itt a Demóban:**\n"
+                "• **🛒 Kosár fül → 🏷️ Spórolás Kifli saját márkákkal** (azonnali csere + kedvenc márkák összehasonlító popup!)\n"
+                "• **📅 Menü fül → ✨ Menüválasztó (Egyéni & Páros)** + kattintásos receptcsere\n"
+                "• **🧻 Háztartás fül → 🧠 Smart Restock** fogyás-előrejelző"
+            )
+            self.db.add_chat_message("assistant", demo_reply, source=source, user_id=user_id)
+            return demo_reply
+
         llm_cfg = self.check_and_consume_ai_quota(user_id=user_id)
         client = self._create_client(llm_cfg)
         history = self.db.get_recent_chat_messages(limit=12, user_id=user_id)
@@ -600,7 +624,21 @@ class ChefShoppingAgent:
             )
 
         ps = self.db.get_planner_settings(user_id=user_id)
-        pref_lines = ["AKTÍV FELHASZNÁLÓI PREFERENCIÁK (KÖTELEZŐ BETARTANI!):"]
+        household_size = int(ps.get("household_size", 2) or 2)
+        plan_days_cnt = max(1, min(7, int(ps.get("plan_days", 7) or 7)))
+        days_per_meal = max(1, min(4, int(ps.get("days_per_meal", 2) or 2)))
+        active_day_labels = ", ".join(d[1] for d in DAYS_HU[:plan_days_cnt])
+        repeat_rule = (
+            "minden napra KÜLÖNBÖZŐ főételt tervezz (1 kaja = 1 nap)!"
+            if days_per_meal == 1
+            else f"1 főtt ételt (ebéd) **{days_per_meal} egymást követő napra** ismételj meg (pl. {days_per_meal} napos blokkokban)!"
+        )
+        pref_lines = [
+            "AKTÍV FELHASZNÁLÓI PREFERENCIÁK (KÖTELEZŐ BETARTANI!):",
+            f"- HÁZTARTÁS MÉRETE: **{household_size} főre** tervezz és számolj adagokat!",
+            f"- TERVEZETT NAPOK SZÁMA: **{plan_days_cnt} napra** tervezz ({active_day_labels}) — a többi napot hagyd üresen!",
+            f"- FŐZÉSI RITMUS (1 kaja hány napig): {repeat_rule}",
+        ]
         if ps.get("weekly_budget_ft", 0) > 0:
             pref_lines.append(
                 f"- HETI BÜDZSÉ KORLÁT: max. {ps['weekly_budget_ft']} Ft! "
@@ -732,8 +770,14 @@ class ChefShoppingAgent:
             )
             reco_summary = ""
 
+        household_size = int(ps.get("household_size", 2) or 2)
+        plan_days_cnt = max(1, min(7, int(ps.get("plan_days", 7) or 7)))
+        days_per_meal = max(1, min(4, int(ps.get("days_per_meal", 2) or 2)))
+        active_day_labels = ", ".join(d[1] for d in DAYS_HU[:plan_days_cnt])
+
         prompt = (
-            "Készíts nekünk egy friss heti menütervezetet erre a hétre (Hétfőtől Vasárnapig: reggeli, ebéd, vacsora)! "
+            f"Készíts nekünk egy friss menütervezetet **{household_size} főre**, pontosan **{plan_days_cnt} napra** ({active_day_labels}: reggeli, ebéd, vacsora), "
+            f"úgy hogy 1 főtt étel **{days_per_meal} napig** legyen! "
             "1) Nézd meg a mentett receptjeinket (`list_saved_recipes` — nézd a `healthy_score` értékeket is!) és az Általános/Háztartási listánkat (`get_current_weekly_plan`). "
             "2) Ha a Kifli MCP be van jelentkezve, KÖTELEZŐEN ellenőrizd a `kifli__batch_search_products` eszközzel a kiszemelt receptek fő/szezonális alapanyagait (pl. kelkáposzta, friss hal, speciális zöldség): ha egy fő hozzávaló NINCS készleten a Kiflin, NE ajánld fel azt az ételt erre a hétre! "
             f"3) Állítsd össze a heti menüt kiegyensúlyozott `healthy_score` elosztással (heti átlag >= {ps.get('min_healthy_score', 3.4)}) {reco_instruction}, és mentsd el a `save_full_weekly_plan` eszközzel! "
@@ -763,6 +807,12 @@ class ChefShoppingAgent:
         self, text_or_url: str, user_id: int = 1
     ) -> dict[str, Any]:
         """URL vagy bemásolt szöveg alapján strukturált receptet nyer ki és elmenti."""
+        user = self.db.get_user_by_id(user_id)
+        llm_cfg = self.resolve_llm_config_for_user(user_id=user_id)
+        if user and user.get("is_demo") and not llm_cfg["using_own_key"]:
+            raise RuntimeError(
+                "Demo módban az AI recept-import ki van kapcsolva. Saját fiókban (saját Gemini/OpenAI API kulccsal vagy Claude MCP-vel) teljes értékűen működik!"
+            )
         llm_cfg = self.check_and_consume_ai_quota(user_id=user_id)
         raw_content = text_or_url.strip()
         source_url = ""
@@ -775,9 +825,11 @@ class ChefShoppingAgent:
 
         client = self._create_client(llm_cfg)
         extract_prompt = (
-            "Nyerj ki az alábbi szövegből/HTML-ből egyetlen receptet szigorúan JSON formátumban!\n"
+            "Nyerj ki az alábbi szövegből/HTML-ből egyetlen receptet szigorúan JSON formátumban, "
+            "és becsüld meg az 1 adagra jutó kalóriát és makrókat (kcal_per_serving, protein_g, carbs_g, fat_g) is!\n"
             "Sémanév-kulcsok:\n"
             '{"title": "...", "categories": ["reggeli"|"ebed"|"vacsora"], "servings": 2, "healthy_score": 3, '
+            '"kcal_per_serving": 520, "protein_g": 32.0, "carbs_g": 48.0, "fat_g": 20.0, '
             '"instructions": "rövid magyar összefoglaló", '
             '"ingredients": [{"name": "...", "quantity": 1.0, "unit": "g|dkg|kg|ml|dl|l|db|ek|tk|csipet", "is_staple": false}]}\n\n'
             f"Forrás:\n{raw_content}"
@@ -802,8 +854,63 @@ class ChefShoppingAgent:
             categories=parsed.get("categories", ["ebed"]),
             servings=int(parsed.get("servings", 2)),
             healthy_score=int(parsed.get("healthy_score", 3) or 3),
+            kcal_per_serving=int(parsed.get("kcal_per_serving", 0) or 0),
+            protein_g=float(parsed.get("protein_g", 0) or 0),
+            carbs_g=float(parsed.get("carbs_g", 0) or 0),
+            fat_g=float(parsed.get("fat_g", 0) or 0),
             instructions=parsed.get("instructions", ""),
             source_url=source_url,
             ingredients=parsed.get("ingredients", []),
+            user_id=user_id,
+        )
+
+    async def estimate_recipe_macros(
+        self, recipe_id: int, user_id: int = 1
+    ) -> dict[str, Any]:
+        """1 villám LLM hívással kiszámolja a recept 1 adagra jutó kalóriáját és makróit (P/CH/Zs)."""
+        user = self.db.get_user_by_id(user_id)
+        llm_cfg = self.resolve_llm_config_for_user(user_id=user_id)
+        if user and user.get("is_demo") and not llm_cfg["using_own_key"]:
+            raise RuntimeError(
+                "Demo módban az AI makró-becslés ki van kapcsolva (kézzel bármikor átírhatod, "
+                "saját fiókban saját Gemini/OpenAI API kulccsal 1 kattintásra kiszámolja!)."
+            )
+
+        recipes = [r for r in self.db.list_recipes(user_id=user_id) if r["id"] == int(recipe_id)]
+        if not recipes:
+            raise ValueError(f"Nem található recept ezzel az ID-val: {recipe_id}")
+        rec = recipes[0]
+
+        llm_cfg = self.check_and_consume_ai_quota(user_id=user_id)
+        client = self._create_client(llm_cfg)
+        prompt = (
+            "Számold ki reálisan a következő recept **1 adagra jutó** tápértékeit a hozzávalók és az adagszám alapján!\n"
+            f"Recept: {rec['title']}\n"
+            f"Összes adagszám: {rec['servings']} adag\n"
+            f"Hozzávalók (összes adagra): {json.dumps(rec['ingredients'], ensure_ascii=False)}\n\n"
+            'Válaszolj SZIGORÚAN egyetlen JSON objektummal: '
+            '{"kcal_per_serving": 550, "protein_g": 35.0, "carbs_g": 48.0, "fat_g": 22.0}'
+        )
+        resp = await self._chat_completion(
+            client=client,
+            messages=[
+                {"role": "system", "content": "Táplálkozástudományi kalkulátor vagy. Csak érvényes JSON-nel válaszolj."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.1,
+            llm_cfg=llm_cfg,
+        )
+        txt = (resp.choices[0].message.content or "{}").strip()
+        if txt.startswith("```"):
+            txt = txt.strip("`")
+            if txt.startswith("json"):
+                txt = txt[4:].strip()
+        parsed = json.loads(txt)
+        return self.db.set_recipe_macros(
+            recipe_id=recipe_id,
+            kcal_per_serving=int(parsed.get("kcal_per_serving", 0) or 0),
+            protein_g=float(parsed.get("protein_g", 0) or 0),
+            carbs_g=float(parsed.get("carbs_g", 0) or 0),
+            fat_g=float(parsed.get("fat_g", 0) or 0),
             user_id=user_id,
         )

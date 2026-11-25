@@ -156,8 +156,7 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
         description=(
             "Új recept felvétele VAGY meglévő recept szerkesztése (ha megadod a recipe_id-t). "
             "categories: ['reggeli', 'ebed', 'vacsora'] részhalmaza. "
-            "healthy_score: 1 (bűnözős/nehéz) .. 5 (szuper-egészséges), alapból 3. "
-            "image_url: opcionális kép URL (vagy használd a set_recipe_image toolt base64/URL képfeltöltéshez). "
+            "healthy_score: 1..5, opcionálisan megadható kcal_per_serving, protein_g, carbs_g, fat_g (1 adagra) és image_url. "
             "ingredients: [{'name': 'burgonya', 'quantity': 1.0, 'unit': 'kg', 'is_staple': false, 'brand_hint': ''}]"
         )
     )
@@ -171,6 +170,10 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
         recipe_id: int | None = None,
         healthy_score: int = 3,
         image_url: str | None = None,
+        kcal_per_serving: int | None = None,
+        protein_g: float | None = None,
+        carbs_g: float | None = None,
+        fat_g: float | None = None,
     ) -> dict[str, Any]:
         return db.create_or_update_recipe(
             title=title,
@@ -182,6 +185,29 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
             recipe_id=recipe_id,
             healthy_score=healthy_score,
             image_url=image_url,
+            kcal_per_serving=kcal_per_serving,
+            protein_g=protein_g,
+            carbs_g=carbs_g,
+            fat_g=fat_g,
+            user_id=_uid(),
+        )
+
+    @mcp.tool(
+        description="Recept 1 adagra jutó kalóriájának és makróinak (kcal_per_serving, protein_g, carbs_g, fat_g) beállítása."
+    )
+    def set_recipe_macros(
+        recipe_id: int,
+        kcal_per_serving: int,
+        protein_g: float,
+        carbs_g: float,
+        fat_g: float,
+    ) -> dict[str, Any]:
+        return db.set_recipe_macros(
+            recipe_id=recipe_id,
+            kcal_per_serving=kcal_per_serving,
+            protein_g=protein_g,
+            carbs_g=carbs_g,
+            fat_g=fat_g,
             user_id=_uid(),
         )
 
@@ -231,14 +257,18 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
 
     @mcp.tool(
         description=(
-            "Frissíti a heti tervező preferenciákat: weekly_budget_ft (0=nincs limit), "
+            "Frissíti a heti tervező preferenciákat: household_size (1..12 fő), plan_days (1..7 nap), "
+            "days_per_meal (1..4 napig ugyanaz a főtt étel), weekly_budget_ft (0=nincs limit), "
             "allergens (pl. ['laktóz', 'glutén']), prefer_private_label (bool), "
             "prefer_discounts_and_save_food (bool), min_healthy_score (1.0..5.0), "
             "ai_recommendations_enabled (bool), ai_recommendation_count (1..7), "
-            "ai_recommendation_meals (['reggeli', 'ebed', 'vacsora'] részhalmaza)."
+            "ai_recommendation_meals (['reggeli', 'ebed', 'vacsora'])."
         )
     )
     def update_planner_settings(
+        household_size: int | None = None,
+        plan_days: int | None = None,
+        days_per_meal: int | None = None,
         weekly_budget_ft: int | None = None,
         allergens: list[str] | None = None,
         prefer_private_label: bool | None = None,
@@ -250,6 +280,9 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
     ) -> dict[str, Any]:
         return db.update_planner_settings(
             {
+                "household_size": household_size,
+                "plan_days": plan_days,
+                "days_per_meal": days_per_meal,
                 "weekly_budget_ft": weekly_budget_ft,
                 "allergens": allergens,
                 "prefer_private_label": prefer_private_label,

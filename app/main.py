@@ -84,6 +84,10 @@ class RecipeInput(BaseModel):
     source_url: str = ""
     image_url: str | None = None
     healthy_score: int = 3
+    kcal_per_serving: int | None = None
+    protein_g: float | None = None
+    carbs_g: float | None = None
+    fat_g: float | None = None
     ingredients: list[IngredientInput] = Field(default_factory=list)
 
 
@@ -134,6 +138,9 @@ class ManualSlotSwapInput(BaseModel):
 
 
 class PlannerSettingsInput(BaseModel):
+    household_size: int | None = None
+    plan_days: int | None = None
+    days_per_meal: int | None = None
     weekly_budget_ft: int | None = None
     allergens: list[str] | None = None
     prefer_private_label: bool | None = None
@@ -153,6 +160,12 @@ class TinderSwipeInput(BaseModel):
     user_slot: str = "p1"
     recipe_id: int
     decision: str = "like"
+
+
+class TinderAcceptMatchInput(BaseModel):
+    days: list[str] = Field(min_length=1)
+    meal_type: str
+    recipe_id: int
 
 
 class CartSwapItemInput(BaseModel):
@@ -614,6 +627,10 @@ def create_app(
             source_url=payload.source_url,
             image_url=payload.image_url,
             healthy_score=payload.healthy_score,
+            kcal_per_serving=payload.kcal_per_serving,
+            protein_g=payload.protein_g,
+            carbs_g=payload.carbs_g,
+            fat_g=payload.fat_g,
             ingredients=[i.model_dump() for i in payload.ingredients],
             user_id=int(user["id"]),
         )
@@ -632,11 +649,24 @@ def create_app(
                 source_url=payload.source_url,
                 image_url=payload.image_url,
                 healthy_score=payload.healthy_score,
+                kcal_per_serving=payload.kcal_per_serving,
+                protein_g=payload.protein_g,
+                carbs_g=payload.carbs_g,
+                fat_g=payload.fat_g,
                 ingredients=[i.model_dump() for i in payload.ingredients],
                 user_id=int(user["id"]),
             )
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/recipes/{recipe_id}/estimate-macros")
+    async def estimate_recipe_macros_api(
+        recipe_id: int, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
+        try:
+            return await agent.estimate_recipe_macros(recipe_id=recipe_id, user_id=int(user["id"]))
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.post("/api/recipes/{recipe_id}/image")
     async def upload_recipe_image(
@@ -1147,6 +1177,42 @@ def create_app(
                 recipe_id=payload.recipe_id,
                 decision=payload.decision,
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/tinder/sessions/{code}/accept")
+    async def accept_tinder_match_api(
+        code: str,
+        payload: TinderAcceptMatchInput,
+        user: dict[str, Any] = Depends(get_current_user),
+    ) -> dict[str, Any]:
+        try:
+            sess = db.get_tinder_session(code)
+            owner_uid = int(sess["owner_user_id"])
+            updated_owner_plan = db.set_weekly_meal_slots_manual(
+                day_keys=payload.days,
+                meal_type=payload.meal_type,
+                recipe_id=payload.recipe_id,
+                user_id=owner_uid,
+            )
+            # Ha a 2. fő másik fiókkal van belépve, az ő menüjébe is tegyük be a közös étel nevét
+            caller_uid = int(user["id"])
+            if caller_uid != owner_uid:
+                rec = next(
+                    (r for r in sess.get("deck_recipes", []) if r["id"] == int(payload.recipe_id)),
+                    None,
+                )
+                if rec:
+                    db.set_weekly_meal_slots_manual(
+                        day_keys=payload.days,
+                        meal_type=payload.meal_type,
+                        custom_title=rec["title"],
+                        user_id=caller_uid,
+                    )
+            return {
+                "plan": updated_owner_plan,
+                "aggregated_shopping": db.aggregate_shopping_list(user_id=owner_uid),
+            }
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 

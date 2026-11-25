@@ -203,6 +203,10 @@ export default function App() {
   const [recCats, setRecCats] = useState<string[]>(["ebed"]);
   const [recServings, setRecServings] = useState(2);
   const [recHealthyScore, setRecHealthyScore] = useState<number>(3);
+  const [recKcal, setRecKcal] = useState<number>(0);
+  const [recProtein, setRecProtein] = useState<number>(0);
+  const [recCarbs, setRecCarbs] = useState<number>(0);
+  const [recFat, setRecFat] = useState<number>(0);
   const [recImageUrl, setRecImageUrl] = useState<string>("");
   const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
   const [pendingImagePreview, setPendingImagePreview] = useState<string>("");
@@ -218,6 +222,10 @@ export default function App() {
     setRecCats(["ebed"]);
     setRecServings(2);
     setRecHealthyScore(3);
+    setRecKcal(0);
+    setRecProtein(0);
+    setRecCarbs(0);
+    setRecFat(0);
     setRecImageUrl("");
     setPendingImageFile(null);
     setPendingImagePreview("");
@@ -233,6 +241,10 @@ export default function App() {
     setRecCats(r.categories.length ? [...r.categories] : ["ebed"]);
     setRecServings(r.servings || 2);
     setRecHealthyScore(r.healthy_score || 3);
+    setRecKcal(r.kcal_per_serving || 0);
+    setRecProtein(r.protein_g || 0);
+    setRecCarbs(r.carbs_g || 0);
+    setRecFat(r.fat_g || 0);
     setRecImageUrl(r.image_url || "");
     setPendingImageFile(null);
     setPendingImagePreview("");
@@ -257,6 +269,9 @@ export default function App() {
   const [callbackUrl, setCallbackUrl] = useState<string>("");
   const [newStaple, setNewStaple] = useState<string>("");
   const [plannerSettings, setPlannerSettings] = useState<PlannerSettings>({
+    household_size: 2,
+    plan_days: 7,
+    days_per_meal: 2,
     weekly_budget_ft: 0,
     allergens: [],
     prefer_private_label: true,
@@ -327,7 +342,8 @@ export default function App() {
         body: JSON.stringify(patch),
       });
       setPlannerSettings(saved);
-      notify("✅ Tervező preferenciák elmentve!");
+      await loadCore();
+      notify("✅ Beállítások elmentve!");
     } catch (e: any) {
       notify(e.message, "err");
     }
@@ -496,7 +512,12 @@ export default function App() {
     try {
       await apiFetch("/api/weekly-plan/generate", { method: "POST" });
       await loadCore();
-      notify("✨ Elkészült az új heti menüterv + 1 ajánlás!");
+      if (currentUser?.is_demo && !currentUser.llm.using_own_key) {
+        setActiveTab("chat");
+        notify("🎯 Demo módban az élő AI generálás ki van kapcsolva — nézd meg a részleteket a chatben!");
+      } else {
+        notify("✨ Elkészült az új heti menüterv!");
+      }
     } catch (e: any) {
       notify(e.message, "err");
     } finally {
@@ -505,6 +526,12 @@ export default function App() {
   }
 
   async function handleSendToKifliCart() {
+    if (currentUser?.is_demo && !currentUser.llm.using_own_key) {
+      await refreshCart();
+      setActiveTab("cart");
+      notify("🎯 Demo Kifli kosár megnyitva — próbáld ki a 🏷️ Sajátmárka-spórolás gombot!");
+      return;
+    }
     setBusyAction("build-cart");
     try {
       await apiFetch("/api/chat", {
@@ -661,6 +688,10 @@ export default function App() {
             categories: recCats.length ? recCats : ["ebed"],
             servings: recServings,
             healthy_score: recHealthyScore,
+            kcal_per_serving: recKcal,
+            protein_g: recProtein,
+            carbs_g: recCarbs,
+            fat_g: recFat,
             image_url: recImageUrl,
             instructions: recInstructions.trim(),
             source_url: recSourceUrl.trim(),
@@ -731,6 +762,12 @@ export default function App() {
     }
   }
 
+  const recipesById = useMemo(() => {
+    const map: Record<number, Recipe> = {};
+    for (const r of recipes) map[r.id] = r;
+    return map;
+  }, [recipes]);
+
   const filteredRecipes = useMemo(() => {
     if (!recipeFilter) return recipes;
     return recipes.filter((r) => r.categories.includes(recipeFilter));
@@ -760,7 +797,7 @@ export default function App() {
       badge: pendingGeneralCount || undefined,
     },
     { id: "recipes", label: "Receptek", icon: UtensilsCrossed },
-    { id: "settings", label: "Kamra", icon: Settings2 },
+    { id: "settings", label: "Beállítások", icon: Settings2 },
   ];
 
   if (!authReady) {
@@ -983,12 +1020,9 @@ export default function App() {
           {currentUser?.is_demo && (
             <div className="mb-4 rounded-2xl bg-amber-50 dark:bg-amber-950/50 border border-amber-400/40 px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-900 dark:text-amber-100">
               <span>
-                🎯 <strong>Interaktív Demo Mód:</strong> szabadon próbálgathatod a Kaja Tindert, a
-                szimulált Kifli kosarat és a Sajátmárka-optimalizálót! (Napi AI keret:{" "}
-                <strong>
-                  {status?.ai_daily_used || 0}/{status?.ai_daily_limit || 8}
-                </strong>
-                )
+                🎯 <strong>Interaktív Demo Mód:</strong> szabadon próbálgathatod a szimulált Kifli
+                kosarat, a Sajátmárka-optimalizálót, a Menüválasztót és a Smart Restockot! (Az élő AI
+                chathez lépj be saját fiókkal és adj meg saját API kulcsot.)
               </span>
               <button
                 type="button"
@@ -1014,12 +1048,14 @@ export default function App() {
               <div className="rounded-3xl bg-gradient-to-br from-[#6FA014] via-[#5C870E] to-[#3F620A] dark:from-[#365314] dark:via-[#263B0F] dark:to-[#182210] border border-emerald-500/25 p-5 sm:p-6 shadow-lg text-white">
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                   <div>
-                    <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-100 dark:text-emerald-300 bg-white/15 dark:bg-emerald-500/10 border border-white/20 dark:border-emerald-500/20 px-2.5 py-1 rounded-full mb-2">
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("settings")}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-100 dark:text-emerald-300 bg-white/15 hover:bg-white/25 dark:bg-emerald-500/10 border border-white/20 dark:border-emerald-500/20 px-2.5 py-1 rounded-full mb-2 transition"
+                    >
                       <Sparkles className="w-3.5 h-3.5" />
-                      {weekly?.plan?.week_start
-                        ? `Hét kezdete: ${weekly.plan.week_start}`
-                        : "Heti okos tervező · Kattints bármelyik étkezésre a 0-tokenes cseréhez!"}
-                    </div>
+                      {`${plannerSettings.household_size} fő · ${plannerSettings.plan_days} nap · 1 kaja ${plannerSettings.days_per_meal} napig ✎`}
+                    </button>
                     <h2 className="text-lg sm:text-2xl font-bold text-white">
                       Mit eszünk ezen a héten?
                     </h2>
@@ -1034,10 +1070,10 @@ export default function App() {
                     <button
                       disabled={busyAction !== ""}
                       onClick={() => setTinderOpen({ day: selectedDay, mealType: "ebed" })}
-                      className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-2xl bg-gradient-to-r from-rose-500 to-orange-500 hover:from-rose-400 hover:to-orange-400 active:scale-[0.98] text-xs sm:text-sm font-bold text-white shadow-lg shadow-rose-500/25 transition disabled:opacity-50"
+                      className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-2xl bg-amber-400 hover:bg-amber-300 active:scale-[0.98] text-xs sm:text-sm font-extrabold text-slate-950 shadow-lg transition disabled:opacity-50"
                     >
-                      <Flame className="w-4 h-4" />
-                      <span>Kaja Tinder</span>
+                      <Sparkles className="w-4 h-4" />
+                      <span>Menüválasztó</span>
                     </button>
 
                     <button
@@ -1079,7 +1115,7 @@ export default function App() {
                 <div className="xl:col-span-8 2xl:col-span-9 space-y-4">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex gap-1.5 overflow-x-auto no-scrollbar py-1">
-                      {DAYS.map((d) => {
+                      {DAYS.slice(0, plannerSettings.plan_days || 7).map((d) => {
                         const isSelected = !showAllDays && selectedDay === d.key;
                         const hasReco =
                           weekly?.plan?.days?.[d.key]?.reggeli?.is_recommendation ||
@@ -1116,11 +1152,11 @@ export default function App() {
                           : "bg-white dark:bg-[#1F261A] border-slate-200 dark:border-white/5 text-slate-600 dark:text-slate-400"
                       }`}
                     >
-                      {showAllDays ? "Napi fókusz" : "Mind a 7 nap"}
+                      {showAllDays ? "Napi fókusz" : `Mind a ${plannerSettings.plan_days || 7} nap`}
                     </button>
                   </div>
 
-                  {/* Napok rácsa: Ha mind a 7 nap látszik, PC-n 2-3 oszlopos naptár-rács! */}
+                  {/* Napok rácsa: csak a beállított napokat mutatja! */}
                   <div
                     className={
                       showAllDays
@@ -1128,10 +1164,33 @@ export default function App() {
                         : "space-y-4"
                     }
                   >
-                    {(showAllDays ? DAYS : DAYS.filter((d) => d.key === selectedDay)).map(
+                    {(showAllDays
+                      ? DAYS.slice(0, plannerSettings.plan_days || 7)
+                      : DAYS.slice(0, plannerSettings.plan_days || 7).filter(
+                          (d) => d.key === selectedDay
+                        ).length
+                      ? DAYS.slice(0, plannerSettings.plan_days || 7).filter(
+                          (d) => d.key === selectedDay
+                        )
+                      : DAYS.slice(0, 1)
+                    ).map(
                       (dayObj) => {
                         const isToday = dayObj.key === todayKey();
                         const slots = weekly?.plan?.days?.[dayObj.key] || {};
+                        const dayMacros = (["reggeli", "ebed", "vacsora"] as const).reduce(
+                          (acc, mc) => {
+                            const sl = slots[mc];
+                            const rec = sl?.recipe_id ? recipesById[sl.recipe_id] : undefined;
+                            if (rec && rec.kcal_per_serving > 0) {
+                              acc.kcal += rec.kcal_per_serving;
+                              acc.p += rec.protein_g || 0;
+                              acc.c += rec.carbs_g || 0;
+                              acc.f += rec.fat_g || 0;
+                            }
+                            return acc;
+                          },
+                          { kcal: 0, p: 0, c: 0, f: 0 }
+                        );
                         const meals: Array<{
                           code: "reggeli" | "ebed" | "vacsora";
                           label: string;
@@ -1167,7 +1226,7 @@ export default function App() {
                                 : "border-slate-200/80 dark:border-white/5"
                             }`}
                           >
-                            <div className="flex items-center justify-between">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
                               <div className="flex items-center gap-2">
                                 <h3 className="font-bold text-base text-slate-900 dark:text-white">
                                   {dayObj.label}
@@ -1178,9 +1237,16 @@ export default function App() {
                                   </span>
                                 )}
                               </div>
-                              <span className="text-[11px] text-slate-400 dark:text-slate-500">
-                                Kattints a cseréhez
-                              </span>
+                              {dayMacros.kcal > 0 ? (
+                                <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-500/20">
+                                  🔥 {dayMacros.kcal} kcal · P {Math.round(dayMacros.p)}g · CH{" "}
+                                  {Math.round(dayMacros.c)}g · Zs {Math.round(dayMacros.f)}g
+                                </span>
+                              ) : (
+                                <span className="text-[11px] text-slate-400 dark:text-slate-500">
+                                  Kattints a cseréhez
+                                </span>
+                              )}
                             </div>
 
                             <div
@@ -2030,6 +2096,12 @@ export default function App() {
                             <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 dark:bg-white/5 text-slate-600 dark:text-slate-400">
                               {r.servings} adag
                             </span>
+                            {r.kcal_per_serving > 0 && (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-500/20">
+                                🔥 {r.kcal_per_serving} kcal · P {Math.round(r.protein_g)}g · CH{" "}
+                                {Math.round(r.carbs_g)}g · Zs {Math.round(r.fat_g)}g
+                              </span>
+                            )}
                           </div>
 
                           <div className="flex flex-wrap gap-1.5 mt-3">
@@ -2259,15 +2331,110 @@ export default function App() {
                 )}
               </div>
 
-              {/* 4. Kártya (Teljes szélességű): 🥗 TERVEZŐ PREFERENCIÁK (Büdzsé, Allergének, Sajátmárka, Akciók) */}
-              <div className="lg:col-span-3 rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
+              {/* 1. Kártya (Legfelül, teljes szélességű): ⚙️ HETI TERVEZŐ & FŐZÉS BEÁLLÍTÁSOK */}
+              <div className="order-first lg:col-span-3 rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
                 <div>
-                  <h3 className="font-bold text-base text-slate-900 dark:text-white">
-                    🥗 Heti Tervező &amp; Kosár Preferenciák (Büdzsé · Allergének · Sajátmárka · Akciók)
-                  </h3>
+                  <h2 className="font-extrabold text-lg text-slate-900 dark:text-white">
+                    ⚙️ Menütervező &amp; Bevásárlás Beállítások
+                  </h2>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    Az AI séf heti menütervezéskor és Kifli kosárépítéskor szigorúan betartja ezeket a szabályokat.
+                    Minden beállítás egy helyen — az AI séf és az összesített bevásárlólista is azonnal ezekhez igazodik.
                   </p>
+                </div>
+
+                {/* Hány főre · Hány napra · 1 kaja hány napig */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* Hány főre */}
+                  <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
+                    <div className="flex justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
+                      <span>👥 Hány főre?</span>
+                      <span className="text-emerald-600 dark:text-emerald-400">
+                        {plannerSettings.household_size} fő
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[1, 2, 3, 4, 5, 6].map((cnt) => {
+                        const active = plannerSettings.household_size === cnt;
+                        return (
+                          <button
+                            type="button"
+                            key={cnt}
+                            onClick={() => savePlannerSettings({ household_size: cnt })}
+                            className={`w-9 h-9 rounded-xl text-xs font-bold border transition ${
+                              active
+                                ? "bg-emerald-600 text-white border-emerald-600 dark:bg-emerald-500 dark:text-slate-950 dark:border-emerald-500 shadow-sm"
+                                : "bg-white dark:bg-[#1C2218] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10"
+                            }`}
+                          >
+                            {cnt}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Hány napra */}
+                  <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
+                    <div className="flex justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
+                      <span>📅 Hány napra tervezzen?</span>
+                      <span className="text-emerald-600 dark:text-emerald-400">
+                        {plannerSettings.plan_days} nap
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[1, 2, 3, 4, 5, 6, 7].map((d) => {
+                        const active = plannerSettings.plan_days === d;
+                        return (
+                          <button
+                            type="button"
+                            key={d}
+                            onClick={() => savePlannerSettings({ plan_days: d })}
+                            className={`w-9 h-9 rounded-xl text-xs font-bold border transition ${
+                              active
+                                ? "bg-emerald-600 text-white border-emerald-600 dark:bg-emerald-500 dark:text-slate-950 dark:border-emerald-500 shadow-sm"
+                                : "bg-white dark:bg-[#1C2218] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10"
+                            }`}
+                          >
+                            {d}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* 1 kaja hány napig */}
+                  <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
+                    <div className="flex justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
+                      <span>🍲 1 kaja hány napig legyen?</span>
+                      <span className="text-emerald-600 dark:text-emerald-400">
+                        {plannerSettings.days_per_meal} nap
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[
+                        { v: 1, l: "1 nap (mindennap új)" },
+                        { v: 2, l: "2 nap" },
+                        { v: 3, l: "3 nap" },
+                        { v: 4, l: "4 nap" },
+                      ].map((opt) => {
+                        const active = plannerSettings.days_per_meal === opt.v;
+                        return (
+                          <button
+                            type="button"
+                            key={opt.v}
+                            onClick={() => savePlannerSettings({ days_per_meal: opt.v })}
+                            className={`px-3 h-9 rounded-xl text-xs font-bold border transition ${
+                              active
+                                ? "bg-emerald-600 text-white border-emerald-600 dark:bg-emerald-500 dark:text-slate-950 dark:border-emerald-500 shadow-sm"
+                                : "bg-white dark:bg-[#1C2218] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10"
+                            }`}
+                          >
+                            {opt.l}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -2578,24 +2745,37 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 6. Kártya (Teljes szélességű): SAJÁT KIFLI OTTHON MCP SZERVER CLAUDE-HOZ */}
-              <div className="lg:col-span-3 rounded-3xl bg-white dark:bg-[#1C2218] border border-emerald-500/30 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
+              {/* 6. Kártya (Teljes szélességű): SAJÁT KIFLI OTTHON MCP LINK CLAUDE-HOZ */}
+              <div className="lg:col-span-3 rounded-3xl bg-white dark:bg-[#1C2218] border border-emerald-500/30 p-5 sm:p-6 space-y-3 shadow-sm dark:shadow-none">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5">
-                    <Terminal className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                    <Terminal className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                     <div>
                       <h3 className="font-bold text-base text-slate-900 dark:text-white">
-                        🔌 Saját „Kifli Otthon” MCP Szerver (Claude mobil app / Desktop / Code)
+                        🔌 Saját Claude MCP Link
                       </h3>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Személyes, csak a te fiókodhoz tartozó MCP végpontod — másold be a Claude Custom Connectorba!
+                        Másold be a Claude (mobil / web) → Settings → Connectors → Custom Connector mezőbe (Authentication: None), és recepteket is fel tudsz venni Claude-ból!
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs font-mono font-bold px-3 py-1.5 rounded-xl bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 break-all">
-                      {personalMcpPath}
-                    </span>
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                  <div className="flex-1 text-xs font-mono font-bold px-3.5 py-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-800 dark:text-emerald-300 break-all select-all">
+                    {personalMcpPath}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(personalMcpPath);
+                        notify("📋 Személyes MCP link a vágólapra másolva!");
+                      }}
+                      className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white dark:bg-emerald-500 dark:hover:bg-emerald-400 dark:text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition"
+                    >
+                      <Copy className="w-3.5 h-3.5" /> Link másolása
+                    </button>
                     {currentUser && !currentUser.is_demo && (
                       <button
                         type="button"
@@ -2606,39 +2786,12 @@ export default function App() {
                           setCurrentUser(u);
                           notify("🔑 Új személyes MCP kulcs generálva!");
                         }}
-                        className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-white/10 text-xs font-semibold text-slate-600 dark:text-slate-300"
+                        className="px-3.5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/15 text-xs font-semibold text-slate-700 dark:text-slate-300 transition"
                       >
                         Új kulcs
                       </button>
                     )}
                   </div>
-                </div>
-
-                <div className="relative">
-                  <pre className="rounded-2xl bg-slate-900 dark:bg-[#121510] text-emerald-300 text-xs p-4 overflow-x-auto border border-slate-800 dark:border-white/10 leading-relaxed">
-{JSON.stringify(
-  {
-    mcpServers: {
-      "kifli-otthon": {
-        command: "npx",
-        args: ["-y", "mcp-remote", personalMcpPath, "--allow-http"],
-      },
-    },
-  },
-  null,
-  2
-)}
-                  </pre>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigator.clipboard.writeText(personalMcpPath);
-                      notify("📋 Személyes MCP URL a vágólapra másolva!");
-                    }}
-                    className="absolute top-3 right-3 px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow"
-                  >
-                    <Copy className="w-3.5 h-3.5" /> URL Másolása
-                  </button>
                 </div>
               </div>
             </div>
@@ -2692,15 +2845,20 @@ export default function App() {
         />
       )}
 
-      {/* MODAL: 🔥 KAJA TINDER (Swipe jobbra/balra 0 AI tokennel!) */}
+      {/* MODAL: ✨ MENÜVÁLASZTÓ (Egyéni & Páros közös választó, 0 AI tokennel!) */}
       {tinderOpen && (
         <FoodTinderSheet
           initialDay={tinderOpen.day}
           initialMealType={tinderOpen.mealType}
+          planDays={plannerSettings.plan_days}
+          daysPerMeal={plannerSettings.days_per_meal}
           recipes={recipes}
           onClose={() => setTinderOpen(null)}
           onAcceptRecipe={async (days, mealType, recipe) => {
             await handleManualSlotSwap(days, mealType, { recipeId: recipe.id });
+          }}
+          onRefreshAfterCoupleAccept={async () => {
+            await loadCore();
           }}
         />
       )}
@@ -2778,7 +2936,7 @@ export default function App() {
               )}
               <div className="flex-1 min-w-0 space-y-1.5">
                 <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                  📸 Recept fotója (Kaja Tinderhez és kártyákhoz)
+                  📸 Recept fotója (Menüválasztóhoz és recept kártyákhoz)
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
                   <label className="cursor-pointer px-3 py-1.5 rounded-xl bg-emerald-600/15 text-emerald-700 dark:text-emerald-300 text-xs font-bold border border-emerald-500/30 hover:bg-emerald-600/25 transition">
@@ -2844,6 +3002,88 @@ export default function App() {
                     </button>
                   );
                 })}
+              </div>
+            </div>
+
+            {/* 🔥 Kalória & Makrók (1 adagra) + 1-kattintásos AI becslés */}
+            <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200 dark:border-white/10 p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  🔥 Kalória &amp; Makrók (1 adagra)
+                </span>
+                {editingRecipeId !== null && (
+                  <button
+                    type="button"
+                    disabled={busyAction === "estimate-macros"}
+                    onClick={async () => {
+                      setBusyAction("estimate-macros");
+                      try {
+                        const updated = await apiFetch<Recipe>(
+                          `/api/recipes/${editingRecipeId}/estimate-macros`,
+                          { method: "POST" }
+                        );
+                        setRecKcal(updated.kcal_per_serving || 0);
+                        setRecProtein(updated.protein_g || 0);
+                        setRecCarbs(updated.carbs_g || 0);
+                        setRecFat(updated.fat_g || 0);
+                        await loadRecipesAndSettings();
+                        notify(`🔥 Makrók kiszámolva: ${updated.kcal_per_serving} kcal / adag!`);
+                      } catch (err: any) {
+                        notify(err.message, "err");
+                      } finally {
+                        setBusyAction("");
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded-xl bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 text-[11px] font-bold transition disabled:opacity-50"
+                  >
+                    {busyAction === "estimate-macros" ? "⏳ Számolás..." : "✨ Becslés AI-val"}
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                <div>
+                  <label className="block text-[10px] text-slate-500 mb-0.5">Kcal</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={recKcal}
+                    onChange={(e) => setRecKcal(Math.max(0, parseInt(e.target.value || "0", 10)))}
+                    className="w-full bg-white dark:bg-[#1C2218] text-slate-900 dark:text-white text-center rounded-xl py-1.5 text-xs border border-slate-200 dark:border-white/10"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-500 mb-0.5">Fehérje (g)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min={0}
+                    value={recProtein}
+                    onChange={(e) => setRecProtein(Math.max(0, parseFloat(e.target.value || "0")))}
+                    className="w-full bg-white dark:bg-[#1C2218] text-slate-900 dark:text-white text-center rounded-xl py-1.5 text-xs border border-slate-200 dark:border-white/10"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-500 mb-0.5">Szénhidrát (g)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min={0}
+                    value={recCarbs}
+                    onChange={(e) => setRecCarbs(Math.max(0, parseFloat(e.target.value || "0")))}
+                    className="w-full bg-white dark:bg-[#1C2218] text-slate-900 dark:text-white text-center rounded-xl py-1.5 text-xs border border-slate-200 dark:border-white/10"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] text-slate-500 mb-0.5">Zsír (g)</label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    min={0}
+                    value={recFat}
+                    onChange={(e) => setRecFat(Math.max(0, parseFloat(e.target.value || "0")))}
+                    className="w-full bg-white dark:bg-[#1C2218] text-slate-900 dark:text-white text-center rounded-xl py-1.5 text-xs border border-slate-200 dark:border-white/10"
+                  />
+                </div>
               </div>
             </div>
 

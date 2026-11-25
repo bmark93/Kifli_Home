@@ -324,14 +324,14 @@ def test_otthon_mcp_server_tools(tmp_path: Path) -> None:
         assert "application/json" in r_init.headers.get("content-type", "")
         assert r_init.json()["result"]["serverInfo"]["name"] == "kifli-otthon"
 
-        # 5. POST tools/list -> 18 tool JSON-ban
+        # 5. POST tools/list -> 19 tool JSON-ban (új: set_recipe_macros)
         r_tools = client.post(
             "/mcp/SecretToken999",
             headers={"Accept": "application/json"},
             json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
         )
         assert r_tools.status_code == 200
-        assert len(r_tools.json()["result"]["tools"]) == 18
+        assert len(r_tools.json()["result"]["tools"]) == 19
 
 
 def test_recipe_image_healthy_score_and_weekly_reset(tmp_path: Path) -> None:
@@ -371,10 +371,20 @@ def test_recipe_image_healthy_score_and_weekly_reset(tmp_path: Path) -> None:
         assert img_url.startswith("/uploads/recipes/")
         assert client.get(img_url).status_code == 200
 
-        # 3. MCP set_recipe_healthy_score + set_recipe_image (base64)
+        # 3. MCP set_recipe_healthy_score + set_recipe_macros + set_recipe_image (base64)
         async def _mcp_updates() -> None:
             mcp_srv = app.state.otthon_mcp
             await mcp_srv.call_tool("set_recipe_healthy_score", {"recipe_id": rid, "healthy_score": 4})
+            await mcp_srv.call_tool(
+                "set_recipe_macros",
+                {
+                    "recipe_id": rid,
+                    "kcal_per_serving": 410,
+                    "protein_g": 14.5,
+                    "carbs_g": 32.0,
+                    "fat_g": 24.0,
+                },
+            )
             await mcp_srv.call_tool(
                 "set_recipe_image",
                 {
@@ -387,6 +397,10 @@ def test_recipe_image_healthy_score_and_weekly_reset(tmp_path: Path) -> None:
         asyncio.run(_mcp_updates())
         updated_rec = [r for r in app.state.db.list_recipes() if r["id"] == rid][0]
         assert updated_rec["healthy_score"] == 4
+        assert updated_rec["kcal_per_serving"] == 410
+        assert updated_rec["protein_g"] == 14.5
+        assert updated_rec["carbs_g"] == 32.0
+        assert updated_rec["fat_g"] == 24.0
         assert updated_rec["image_url"].startswith("/uploads/recipes/")
 
         # 4. Heti menü beállítása, majd RESET 0 AI tokennel
@@ -410,10 +424,13 @@ def test_couple_tinder_match_planner_settings_and_smart_restock(tmp_path: Path) 
     app = create_app(custom_settings=settings, enable_background=False)
 
     with TestClient(app) as client:
-        # 1. Planner Settings mentés & visszaolvasás (AI ajánlás ki/be + darabszám + kategória)
+        # 1. Planner Settings mentés & visszaolvasás (fő, nap, 1 kaja hány napig, AI ajánlás)
         upd = client.put(
             "/api/planner-settings",
             json={
+                "household_size": 4,
+                "plan_days": 5,
+                "days_per_meal": 3,
                 "weekly_budget_ft": 42000,
                 "allergens": ["laktóz", "glutén"],
                 "prefer_private_label": True,
@@ -426,6 +443,9 @@ def test_couple_tinder_match_planner_settings_and_smart_restock(tmp_path: Path) 
         )
         assert upd.status_code == 200
         ps = client.get("/api/planner-settings").json()
+        assert ps["household_size"] == 4
+        assert ps["plan_days"] == 5
+        assert ps["days_per_meal"] == 3
         assert ps["weekly_budget_ft"] == 42000
         assert ps["allergens"] == ["laktóz", "glutén"]
         assert ps["min_healthy_score"] == 4.0
@@ -463,6 +483,15 @@ def test_couple_tinder_match_planner_settings_and_smart_restock(tmp_path: Path) 
         assert s3["is_match"] is True
         assert s3["matched_recipe"]["id"] == r1_id
         assert len(s3["session"]["matches"]) == 1
+        assert len(s3["session"]["deck_recipes"]) >= 2
+
+        # Közös kedvenc elfogadása /accept végponttal
+        acc = client.post(
+            f"/api/tinder/sessions/{code}/accept",
+            json={"days": ["hetfo", "kedd"], "meal_type": "ebed", "recipe_id": r1_id},
+        )
+        assert acc.status_code == 200
+        assert acc.json()["plan"]["days"]["hetfo"]["ebed"]["recipe_id"] == r1_id
 
     # 3. Smart Restock fogyás-előrejelző determinisztikus teszt
     now = dt.datetime(2026, 11, 25, 10, 0, tzinfo=dt.timezone.utc)
@@ -652,6 +681,11 @@ def test_multi_user_auth_isolation_byok_and_demo_sandbox(tmp_path: Path) -> None
         opt = client.post("/api/kifli/cart/optimize-private-label").json()
         assert len(opt["auto_swapped"]) >= 2
         assert len(opt["favorite_proposals"]) >= 1  # Zewa Deluxe és Magyar Tej kedvenc!
+
+        # Demo chat 0 AI költséggel statikus magyar tájékoztatót ad vissza
+        demo_chat = client.post("/api/chat", json={"message": "Szia, mit főzzek?"})
+        assert demo_chat.status_code == 200
+        assert "Demo módban az AI séf" in demo_chat.json()["reply"]
 
         # Napi AI limit (demo_daily_ai_limit=3) tényleg leállítja a 4. hívást
         demo_uid = d.json()["id"]
