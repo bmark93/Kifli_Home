@@ -2635,24 +2635,37 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 6. Kártya (Teljes szélességű): SAJÁT KIFLI OTTHON MCP SZERVER CLAUDE-HOZ */}
-              <div className="lg:col-span-3 rounded-3xl bg-white dark:bg-[#1C2218] border border-emerald-500/30 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
+              {/* 6. Kártya (Teljes szélességű): SAJÁT KIFLI OTTHON MCP LINK CLAUDE-HOZ */}
+              <div className="lg:col-span-3 rounded-3xl bg-white dark:bg-[#1C2218] border border-emerald-500/30 p-5 sm:p-6 space-y-3 shadow-sm dark:shadow-none">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5">
-                    <Terminal className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                    <Terminal className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
                     <div>
                       <h3 className="font-bold text-base text-slate-900 dark:text-white">
-                        🔌 Saját „Kifli Otthon” MCP Szerver (Claude mobil app / Desktop / Code)
+                        🔌 Saját Claude MCP Link
                       </h3>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Személyes, csak a te fiókodhoz tartozó MCP végpontod — másold be a Claude Custom Connectorba!
+                        Másold be a Claude (mobil / web) → Settings → Connectors → Custom Connector mezőbe (Authentication: None), és recepteket is fel tudsz venni Claude-ból!
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-xs font-mono font-bold px-3 py-1.5 rounded-xl bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 break-all">
-                      {personalMcpPath}
-                    </span>
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                  <div className="flex-1 text-xs font-mono font-bold px-3.5 py-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-800 dark:text-emerald-300 break-all select-all">
+                    {personalMcpPath}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(personalMcpPath);
+                        notify("📋 Személyes MCP link a vágólapra másolva!");
+                      }}
+                      className="flex-1 sm:flex-none px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white dark:bg-emerald-500 dark:hover:bg-emerald-400 dark:text-slate-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition"
+                    >
+                      <Copy className="w-3.5 h-3.5" /> Link másolása
+                    </button>
                     {currentUser && !currentUser.is_demo && (
                       <button
                         type="button"
@@ -2663,39 +2676,12 @@ export default function App() {
                           setCurrentUser(u);
                           notify("🔑 Új személyes MCP kulcs generálva!");
                         }}
-                        className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-white/10 text-xs font-semibold text-slate-600 dark:text-slate-300"
+                        className="px-3.5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/15 text-xs font-semibold text-slate-700 dark:text-slate-300 transition"
                       >
                         Új kulcs
                       </button>
                     )}
                   </div>
-                </div>
-
-                <div className="relative">
-                  <pre className="rounded-2xl bg-slate-900 dark:bg-[#121510] text-emerald-300 text-xs p-4 overflow-x-auto border border-slate-800 dark:border-white/10 leading-relaxed">
-{JSON.stringify(
-  {
-    mcpServers: {
-      "kifli-otthon": {
-        command: "npx",
-        args: ["-y", "mcp-remote", personalMcpPath, "--allow-http"],
-      },
-    },
-  },
-  null,
-  2
-)}
-                  </pre>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigator.clipboard.writeText(personalMcpPath);
-                      notify("📋 Személyes MCP URL a vágólapra másolva!");
-                    }}
-                    className="absolute top-3 right-3 px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow"
-                  >
-                    <Copy className="w-3.5 h-3.5" /> URL Másolása
-                  </button>
                 </div>
               </div>
             </div>
