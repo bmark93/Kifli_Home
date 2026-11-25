@@ -37,6 +37,8 @@ export interface WeeklyPlanResponse {
       quantity: number;
       unit: string;
       brand_hint?: string;
+      diet_tags?: string[];
+      search_hint?: string;
       preferred_kifli_product?: { id: string; name: string } | null;
       used_in: string[];
     }>;
@@ -167,6 +169,79 @@ export interface KifliCart {
   item_count: number;
   total_units: number;
   items: KifliCartItem[];
+}
+
+export interface PlannerSettings {
+  weekly_budget_ft: number;
+  allergens: string[];
+  prefer_private_label: boolean;
+  prefer_discounts_and_save_food: boolean;
+  min_healthy_score: number;
+  ai_recommendations_enabled: boolean;
+  ai_recommendation_count: number;
+  ai_recommendation_meals: string[];
+}
+
+export interface SmartRestockItem {
+  name: string;
+  kifli_product_id: string;
+  brand_hint: string;
+  source: string;
+  order_count: number;
+  avg_interval_days: number;
+  days_since_last: number;
+  due_ratio: number;
+  urgency: "overdue" | "soon";
+  reason: string;
+}
+
+export interface SmartRestockResponse {
+  kifli_connected: boolean;
+  kifli_orders_analyzed: number;
+  local_events_analyzed: number;
+  suggestions: SmartRestockItem[];
+}
+
+export interface TinderSessionState {
+  code: string;
+  meal_type: "reggeli" | "ebed" | "vacsora";
+  target_days: string[];
+  created_at: string;
+  p1_swiped_ids: number[];
+  p2_swiped_ids: number[];
+  p1_like_count: number;
+  p2_like_count: number;
+  matches: Recipe[];
+}
+
+export interface TinderSwipeResult {
+  is_match: boolean;
+  matched_recipe: Recipe | null;
+  session: TinderSessionState;
+}
+
+export interface PrivateLabelSwapProposal {
+  old_product_id: number;
+  old_name: string;
+  old_quantity: number;
+  old_price_ft: number;
+  old_image_url: string;
+  new_product_id: number;
+  new_name: string;
+  new_brand: string;
+  new_amount: string;
+  new_quantity: number;
+  new_unit_price_ft: number;
+  new_price_ft: number;
+  savings_ft: number;
+}
+
+export interface OptimizePrivateLabelResponse {
+  cart: KifliCart;
+  auto_swapped: PrivateLabelSwapProposal[];
+  auto_savings_ft: number;
+  favorite_proposals: PrivateLabelSwapProposal[];
+  message: string;
 }
 
 export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {

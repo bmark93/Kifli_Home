@@ -213,15 +213,15 @@ def test_recipe_editing_and_zero_token_manual_slot_swap(tmp_path: Path) -> None:
     assert body["plan"]["days"]["hetfo"]["ebed"]["title"] == "Paprikás krumpli kolbásszal"
     assert body["plan"]["days"]["kedd"]["ebed"]["title"] == "Paprikás krumpli kolbásszal"
 
-    # Összesített bevásárlólista 2 napra duplázza a szerkesztett mennyiségeket (2 x 1.5 kg = 3.0 kg)
+    # 4 adagos recept Hétfő + Kedd egymást követő ebédre = 1 főzés (NEM duplázza 3.0 kg-ra!)
     agg_by_name = {
         i["name"]: i for i in body["aggregated_shopping"]["recipe_and_adhoc_items"]
     }
-    assert agg_by_name["burgonya"]["quantity"] == 3.0
-    assert agg_by_name["füstölt kolbász"]["quantity"] == 400.0
+    assert agg_by_name["burgonya"]["quantity"] == 1.5
+    assert agg_by_name["füstölt kolbász"]["quantity"] == 200.0
     assert agg_by_name["füstölt kolbász"]["brand_hint"] == "Gyulai"
 
-    # 3. Étkezés törlése/kihagyása Kedd ebédről
+    # 3. Étkezés törlése/kihagyása Kedd ebédről (Hétfő továbbra is 1 főzés marad)
     cleared = client.put(
         "/api/weekly-plan/slot",
         json={"days": ["kedd"], "meal_type": "ebed", "clear": True},
@@ -306,14 +306,14 @@ def test_otthon_mcp_server_tools(tmp_path: Path) -> None:
         assert "application/json" in r_init.headers.get("content-type", "")
         assert r_init.json()["result"]["serverInfo"]["name"] == "kifli-otthon"
 
-        # 5. POST tools/list -> 16 tool JSON-ban (új: set_recipe_image, set_recipe_healthy_score, reset_weekly_menu)
+        # 5. POST tools/list -> 18 tool JSON-ban
         r_tools = client.post(
             "/mcp/SecretToken999",
             headers={"Accept": "application/json"},
             json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
         )
         assert r_tools.status_code == 200
-        assert len(r_tools.json()["result"]["tools"]) == 16
+        assert len(r_tools.json()["result"]["tools"]) == 18
 
 
 def test_recipe_image_healthy_score_and_weekly_reset(tmp_path: Path) -> None:
@@ -382,3 +382,165 @@ def test_recipe_image_healthy_score_and_weekly_reset(tmp_path: Path) -> None:
         assert reset_resp.status_code == 200
         assert reset_resp.json()["plan"]["days"]["hetfo"] == {}
         assert reset_resp.json()["aggregated_shopping"]["recipe_and_adhoc_items"] == []
+
+
+def test_couple_tinder_match_planner_settings_and_smart_restock(tmp_path: Path) -> None:
+    import datetime as dt
+    from app.smart_restock import compute_restock_predictions_from_events
+
+    settings = _make_settings(tmp_path)
+    app = create_app(custom_settings=settings, enable_background=False)
+
+    with TestClient(app) as client:
+        # 1. Planner Settings mentés & visszaolvasás (AI ajánlás ki/be + darabszám + kategória)
+        upd = client.put(
+            "/api/planner-settings",
+            json={
+                "weekly_budget_ft": 42000,
+                "allergens": ["laktóz", "glutén"],
+                "prefer_private_label": True,
+                "prefer_discounts_and_save_food": True,
+                "min_healthy_score": 4.0,
+                "ai_recommendations_enabled": False,
+                "ai_recommendation_count": 3,
+                "ai_recommendation_meals": ["reggeli", "vacsora"],
+            },
+        )
+        assert upd.status_code == 200
+        ps = client.get("/api/planner-settings").json()
+        assert ps["weekly_budget_ft"] == 42000
+        assert ps["allergens"] == ["laktóz", "glutén"]
+        assert ps["min_healthy_score"] == 4.0
+        assert ps["ai_recommendations_enabled"] is False
+        assert ps["ai_recommendation_count"] == 3
+        assert ps["ai_recommendation_meals"] == ["reggeli", "vacsora"]
+
+        # 2. Páros Kaja Tinder Match szoba (p1 + p2 -> IT'S A MATCH!)
+        recipes = client.get("/api/recipes?category=ebed").json()
+        r1_id, r2_id = recipes[0]["id"], recipes[1]["id"]
+
+        sess = client.post(
+            "/api/tinder/sessions",
+            json={"meal_type": "ebed", "target_days": ["hetfo", "kedd"]},
+        ).json()
+        code = sess["code"]
+        assert len(code) == 4
+
+        s1 = client.post(
+            f"/api/tinder/sessions/{code}/swipe",
+            json={"user_slot": "p1", "recipe_id": r1_id, "decision": "like"},
+        ).json()
+        assert s1["is_match"] is False
+
+        s2 = client.post(
+            f"/api/tinder/sessions/{code}/swipe",
+            json={"user_slot": "p2", "recipe_id": r2_id, "decision": "pass"},
+        ).json()
+        assert s2["is_match"] is False
+
+        s3 = client.post(
+            f"/api/tinder/sessions/{code}/swipe",
+            json={"user_slot": "p2", "recipe_id": r1_id, "decision": "like"},
+        ).json()
+        assert s3["is_match"] is True
+        assert s3["matched_recipe"]["id"] == r1_id
+        assert len(s3["session"]["matches"]) == 1
+
+    # 3. Smart Restock fogyás-előrejelző determinisztikus teszt
+    now = dt.datetime(2026, 11, 25, 10, 0, tzinfo=dt.timezone.utc)
+    events = [
+        {"name": "Zewa papírzsebkendő", "ordered_at": "2026-10-15T10:00:00Z", "kifli_product_id": "97249"},
+        {"name": "Zewa papírzsebkendő", "ordered_at": "2026-11-04T10:00:00Z", "kifli_product_id": "97249"},
+        {"name": "Már listán lévő WC papír", "ordered_at": "2026-10-10T10:00:00Z", "kifli_product_id": "115386"},
+        {"name": "Már listán lévő WC papír", "ordered_at": "2026-10-28T10:00:00Z", "kifli_product_id": "115386"},
+    ]
+    preds = compute_restock_predictions_from_events(
+        events,
+        active_general_keys={"már listán lévő wc papír"},
+        now=now,
+    )
+    assert len(preds) == 1
+    assert preds[0]["name"] == "Zewa papírzsebkendő"
+    assert preds[0]["urgency"] == "overdue"
+    assert preds[0]["avg_interval_days"] == 20.0
+
+
+def test_private_label_auto_vs_favorite_split(tmp_path: Path) -> None:
+    from app.private_label import (
+        extract_favorite_product_ids,
+        is_kifli_private_label,
+        split_auto_vs_favorite_swaps,
+    )
+
+    assert is_kifli_private_label("Miil ESL Tej 2,8%", "Miil") is True
+    assert is_kifli_private_label("Magyar Tej ESL 2,8%", "Magyar Tej") is False
+
+    db = Database(tmp_path / "pl.db")
+    db.save_product_preference("tej", "16321", "Magyar Tej ESL Tej 2,8%")
+
+    fav_ids, fav_labels = extract_favorite_product_ids(
+        db, '{"data": [{"productId": 97249, "productName": "Zewa Deluxe"}]}'
+    )
+    assert 16321 in fav_ids
+    assert 97249 in fav_ids
+
+    candidates = [
+        {
+            "old_product_id": 16321,
+            "old_name": "Magyar Tej ESL Tej 2,8%",
+            "new_product_id": 97506,
+            "new_name": "Miil ESL tej",
+            "savings_ft": 180,
+        },
+        {
+            "old_product_id": 55555,
+            "old_name": "Drága tészta 500g",
+            "new_product_id": 88888,
+            "new_name": "Kitchin spagetti 500g",
+            "savings_ft": 350,
+        },
+        {
+            "old_product_id": 97249,
+            "old_name": "Zewa Deluxe",
+            "new_product_id": 105944,
+            "new_name": "Moddia papírzsebkendő",
+            "savings_ft": 290,
+        },
+    ]
+    auto_swaps, fav_proposals = split_auto_vs_favorite_swaps(candidates, fav_ids, fav_labels)
+    assert [a["old_product_id"] for a in auto_swaps] == [55555]
+    assert {f["old_product_id"] for f in fav_proposals} == {16321, 97249}
+
+
+def test_lactose_and_gluten_diet_substitution_in_shopping_list(tmp_path: Path) -> None:
+    db = Database(tmp_path / "diet.db")
+    db.update_planner_settings({"allergens": ["laktóz", "glutén"]})
+
+    # Kedvenc sima (laktózos) tej ne kerüljön erőltetésre laktózmentes módban!
+    db.save_product_preference("tej 2,8%", "16321", "Magyar Tej ESL Tej 2,8%")
+
+    recipes = db.list_recipes()
+    zabkasa = next(r for r in recipes if "Zabkása" in r["title"])
+    paprikas = next(r for r in recipes if "Csirkepaprikás" in r["title"])
+
+    # Hétfő + Kedd reggeli (2 adag -> 2x), Hétfő + Kedd ebéd (4 adag -> 1x főzés!)
+    db.set_weekly_meal_slots_manual(["hetfo", "kedd"], "reggeli", recipe_id=zabkasa["id"])
+    db.set_weekly_meal_slots_manual(["hetfo", "kedd"], "ebed", recipe_id=paprikas["id"])
+
+    agg = db.aggregate_shopping_list()
+    by_name = {i["name"].lower(): i for i in agg["recipe_and_adhoc_items"]}
+
+    # Mind a tej, mind a tejföl bent marad, laktózmentes címkével + search_hint-tel!
+    assert "tej 2,8%" in by_name
+    assert by_name["tej 2,8%"]["diet_tags"] == ["laktózmentes"]
+    assert by_name["tej 2,8%"]["search_hint"] == "laktózmentes tej 2,8%"
+    assert by_name["tej 2,8%"]["preferred_kifli_product"] is None  # nem erőlteti a laktózos kedvencet
+    assert by_name["tej 2,8%"]["quantity"] == 0.8  # 2 nap * 0.4 l (mert 2 adagos reggeli)
+
+    assert "tejföl 20%" in by_name
+    assert by_name["tejföl 20%"]["diet_tags"] == ["laktózmentes"]
+    assert by_name["tejföl 20%"]["search_hint"] == "laktózmentes tejföl 20%"
+    assert by_name["tejföl 20%"]["quantity"] == 330.0  # 1 főzés 2 napra (mert 4 adagos ebéd!)
+
+    # Nokedli gluténmentes címkét kap
+    assert by_name["friss nokedli"]["diet_tags"] == ["gluténmentes"]

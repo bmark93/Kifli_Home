@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import secrets
 import sqlite3
 import unicodedata
 from contextlib import contextmanager
@@ -32,6 +33,67 @@ DEFAULT_STAPLES = [
     "fokhagyma",
     "ecet",
 ]
+
+DAIRY_KEYWORDS = (
+    "tej",
+    "tejföl",
+    "tejszín",
+    "vaj",
+    "túró",
+    "sajt",
+    "trappista",
+    "gouda",
+    "joghurt",
+    "kefir",
+    "mascarpone",
+    "mozzarella",
+    "krémsajt",
+    "cheddar",
+    "feta",
+    "camembert",
+    "parmezán",
+    "tejszínhab",
+    "ricotta",
+)
+
+GLUTEN_KEYWORDS = (
+    "tészta",
+    "spagetti",
+    "penne",
+    "fusilli",
+    "nokedli",
+    "kenyér",
+    "zsemle",
+    "kifli",
+    "liszt",
+    "zsemlemorzsa",
+    "tortilla",
+    "pita",
+    "kuszkusz",
+    "bulgur",
+    "keksz",
+)
+
+
+def detect_diet_requirements(ingredient_name: str, active_allergens: list[str]) -> list[str]:
+    """
+    Ha laktóz/glutén szűrő aktív, a tejtermékeket és gluténos tésztákat/kenyereket
+    NEM kihagyja, hanem 'laktózmentes' / 'gluténmentes' helyettesítő címkével látja el!
+    """
+    low = normalize_key(ingredient_name)
+    allergs = {a.strip().lower() for a in active_allergens}
+    tags: list[str] = []
+
+    if "laktóz" in allergs:
+        is_plant_based = any(w in low for w in ("laktózmentes", "növényi", "zabital", "mandula", "kókusz", "rizsital", "szójaital"))
+        if not is_plant_based and any(k in low for k in DAIRY_KEYWORDS):
+            tags.append("laktózmentes")
+
+    if "glutén" in allergs:
+        if "gluténmentes" not in low and any(k in low for k in GLUTEN_KEYWORDS):
+            tags.append("gluténmentes")
+
+    return tags
 
 
 def normalize_key(text: str) -> str:
@@ -148,6 +210,29 @@ class Database:
                 CREATE TABLE IF NOT EXISTS processed_kifli_orders (
                     order_id TEXT PRIMARY KEY,
                     processed_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
+                CREATE TABLE IF NOT EXISTS planner_settings (
+                    key TEXT PRIMARY KEY,
+                    value_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
+                -- Páros Kaja Tinder Match szobák (2 telefon közös húzogatása -> IT'S A MATCH!)
+                CREATE TABLE IF NOT EXISTS tinder_sessions (
+                    code TEXT PRIMARY KEY,
+                    meal_type TEXT NOT NULL DEFAULT 'ebed',
+                    target_days_json TEXT NOT NULL DEFAULT '["hetfo","kedd"]',
+                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                );
+
+                CREATE TABLE IF NOT EXISTS tinder_swipes (
+                    session_code TEXT NOT NULL REFERENCES tinder_sessions(code) ON DELETE CASCADE,
+                    user_slot TEXT NOT NULL CHECK (user_slot IN ('p1', 'p2')),
+                    recipe_id INTEGER NOT NULL REFERENCES recipes(id) ON DELETE CASCADE,
+                    decision TEXT NOT NULL CHECK (decision IN ('like', 'pass')),
+                    swiped_at TEXT NOT NULL DEFAULT (datetime('now')),
+                    PRIMARY KEY (session_code, user_slot, recipe_id)
                 );
                 """
             )
@@ -795,13 +880,16 @@ class Database:
     def aggregate_shopping_list(self, week_start: str | None = None) -> dict[str, Any]:
         """
         Összevonja a heti menü összes hozzávalóját + az adhoc tételeket + az Általános PENDING listát,
-        különválasztja a kamra-alapanyagokat, és hozzárendeli a kedvenc Kifli termékeket.
+        különválasztja a kamra-alapanyagokat, figyelembe veszi a 2-napos nagy főzéseket (servings >= 4),
+        és automatikusan ráteszi a laktózmentes / gluténmentes helyettesítő jelzőt.
         """
         wk = week_start or current_week_monday()
         plan = self.get_weekly_plan(wk)
         recipes_by_id = {r["id"]: r for r in self.list_recipes()}
         staples_keys = {s["key"] for s in self.list_staples()}
         prefs_by_key = {p["ingredient_key"]: p for p in self.list_product_preferences()}
+        planner_prefs = self.get_planner_settings()
+        active_allergens = planner_prefs.get("allergens") or []
 
         merged: dict[tuple[str, str], dict[str, Any]] = {}
         staples_needed: set[str] = set()
@@ -819,20 +907,30 @@ class Database:
             if is_staple or nkey in staples_keys:
                 staples_needed.add(name.strip())
                 return
+            diet_tags = detect_diet_requirements(name, active_allergens)
             bucket_key = (nkey, ukey)
             if bucket_key not in merged:
                 pref = prefs_by_key.get(nkey)
+                # Ha laktózmentes/gluténmentes kell, és a régi kedvenc nem az, ne erőltessük a laktózos kedvencet!
+                pref_ok = pref is not None
+                if pref and diet_tags:
+                    pname_low = pref["kifli_product_name"].lower()
+                    if any(dt not in pname_low for dt in diet_tags):
+                        pref_ok = False
+                search_hint = f"{' '.join(diet_tags)} {name.strip()}".strip() if diet_tags else name.strip()
                 merged[bucket_key] = {
                     "name": name.strip(),
                     "quantity": float(qty),
                     "unit": unit.strip() or "db",
                     "brand_hint": brand_hint.strip(),
+                    "diet_tags": diet_tags,
+                    "search_hint": search_hint,
                     "preferred_kifli_product": (
                         {
                             "id": pref["kifli_product_id"],
                             "name": pref["kifli_product_name"],
                         }
-                        if pref
+                        if (pref and pref_ok)
                         else None
                     ),
                     "used_in": [origin] if origin else [],
@@ -845,17 +943,35 @@ class Database:
                     merged[bucket_key]["used_in"].append(origin)
 
         if plan:
-            for day_code, day_label in DAYS_HU:
+            # 2 napos főzés (batch cooking) felismerése: ha egy >= 4 adagos ebéd/vacsora recept
+            # két egymást követő napon ismétlődik, azt 1 főzésként számoljuk (nem duplázza a hozzávalókat!)
+            last_batch_cooked: dict[str, tuple[str, int]] = {}
+            for day_idx, (day_code, day_label) in enumerate(DAYS_HU):
                 day_slots = plan["days"].get(day_code, {})
                 for meal_code in MEAL_TYPES:
                     slot = day_slots.get(meal_code)
                     if not slot:
+                        last_batch_cooked.pop(meal_code, None)
                         continue
-                    origin_label = f"{day_label} {meal_code}: {slot.get('title', '')}"
                     rid = slot.get("recipe_id")
+                    title_key = str(rid) if rid else normalize_key(slot.get("title", ""))
+                    rec_obj = recipes_by_id.get(rid) if rid else None
+                    servings = int(rec_obj["servings"]) if rec_obj else 2
+
+                    if meal_code in ("ebed", "vacsora") and servings >= 4:
+                        prev = last_batch_cooked.get(meal_code)
+                        if prev and prev[0] == title_key and prev[1] == day_idx - 1:
+                            # Ez a tegnapi 4 adagos főzés 2. napja -> nem vesszük meg kétszer!
+                            last_batch_cooked.pop(meal_code, None)
+                            continue
+                        last_batch_cooked[meal_code] = (title_key, day_idx)
+                    else:
+                        last_batch_cooked.pop(meal_code, None)
+
+                    origin_label = f"{day_label} {meal_code}: {slot.get('title', '')}"
                     custom_ings = slot.get("custom_ingredients") or []
-                    if rid and rid in recipes_by_id and not custom_ings:
-                        for ing in recipes_by_id[rid]["ingredients"]:
+                    if rec_obj and not custom_ings:
+                        for ing in rec_obj["ingredients"]:
                             _accumulate(
                                 ing["name"],
                                 ing["quantity"],
@@ -938,3 +1054,173 @@ class Database:
     def clear_chat_history(self) -> None:
         with self.connect() as conn:
             conn.execute("DELETE FROM chat_messages")
+
+    # -------------------------------------------------------------------------
+    # Tervező preferenciák (Büdzsé, Allergének, Sajátmárka, Akciók, Healthy)
+    # -------------------------------------------------------------------------
+    DEFAULT_PLANNER_SETTINGS: dict[str, Any] = {
+        "weekly_budget_ft": 0,  # 0 = nincs felső korlát
+        "allergens": [],  # pl. ["laktóz", "glutén", "diófélék", "tojás", "szója", "hal"]
+        "prefer_private_label": True,  # Kifli sajátmárkák (Miil, Moddia, Yutto, Ubomi, Dacello, Kitchin)
+        "prefer_discounts_and_save_food": True,  # Akciók & Mentsd meg az ételt előnyben
+        "min_healthy_score": 3.4,  # Elvárt heti átlag Healthy Score
+        "ai_recommendations_enabled": True,  # Random +N új AI receptajánlás ki/be
+        "ai_recommendation_count": 1,  # Hány új AI ötlet (1..5)
+        "ai_recommendation_meals": ["ebed"],  # Miben: reggeli, ebed, vacsora
+    }
+
+    def get_planner_settings(self) -> dict[str, Any]:
+        result = dict(self.DEFAULT_PLANNER_SETTINGS)
+        with self.connect() as conn:
+            rows = conn.execute("SELECT key, value_json FROM planner_settings").fetchall()
+            for r in rows:
+                if r["key"] in result:
+                    try:
+                        result[r["key"]] = json.loads(r["value_json"])
+                    except Exception:
+                        pass
+        return result
+
+    def update_planner_settings(self, updates: dict[str, Any]) -> dict[str, Any]:
+        current = self.get_planner_settings()
+        with self.connect() as conn:
+            for k, v in updates.items():
+                if k not in self.DEFAULT_PLANNER_SETTINGS or v is None:
+                    continue
+                if k == "weekly_budget_ft":
+                    v = max(0, int(v))
+                elif k == "min_healthy_score":
+                    v = max(1.0, min(5.0, round(float(v), 1)))
+                elif k == "ai_recommendation_count":
+                    v = max(1, min(7, int(v)))
+                elif k in (
+                    "prefer_private_label",
+                    "prefer_discounts_and_save_food",
+                    "ai_recommendations_enabled",
+                ):
+                    v = bool(v)
+                elif k == "allergens":
+                    v = [str(a).strip().lower() for a in v if str(a).strip()]
+                elif k == "ai_recommendation_meals":
+                    cleaned = [
+                        strip_accents(str(m).strip().lower())
+                        for m in v
+                        if strip_accents(str(m).strip().lower()) in MEAL_TYPES
+                    ]
+                    v = cleaned or ["ebed"]
+                current[k] = v
+                conn.execute(
+                    """
+                    INSERT INTO planner_settings (key, value_json, updated_at)
+                    VALUES (?, ?, datetime('now'))
+                    ON CONFLICT(key) DO UPDATE SET
+                        value_json = excluded.value_json,
+                        updated_at = datetime('now')
+                    """,
+                    (k, json.dumps(v, ensure_ascii=False)),
+                )
+        return current
+
+    # -------------------------------------------------------------------------
+    # Páros Kaja Tinder Match (2 fős valós idejű szinkronizált húzogatás)
+    # -------------------------------------------------------------------------
+    def create_tinder_session(
+        self, meal_type: str = "ebed", target_days: list[str] | None = None
+    ) -> dict[str, Any]:
+        meal_norm = strip_accents(meal_type.lower().strip())
+        if meal_norm not in MEAL_TYPES:
+            meal_norm = "ebed"
+        days = target_days or ["hetfo", "kedd"]
+        # Olvasható 4 karakteres szobakód (O/0/I/1 nélkül)
+        alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+        code = "".join(secrets.choice(alphabet) for _ in range(4))
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO tinder_sessions (code, meal_type, target_days_json)
+                VALUES (?, ?, ?)
+                """,
+                (code, meal_norm, json.dumps(days, ensure_ascii=False)),
+            )
+        return self.get_tinder_session(code)
+
+    def get_tinder_session(self, code: str) -> dict[str, Any]:
+        clean_code = code.strip().upper()
+        with self.connect() as conn:
+            sess = conn.execute(
+                "SELECT * FROM tinder_sessions WHERE code = ?", (clean_code,)
+            ).fetchone()
+            if not sess:
+                raise ValueError(f"Nem található Páros Tinder szoba ezzel a kóddal: {clean_code}")
+            swipes = conn.execute(
+                "SELECT user_slot, recipe_id, decision, swiped_at FROM tinder_swipes WHERE session_code = ?",
+                (clean_code,),
+            ).fetchall()
+
+        p1_likes: set[int] = set()
+        p2_likes: set[int] = set()
+        p1_swiped: list[int] = []
+        p2_swiped: list[int] = []
+        for s in swipes:
+            rid = int(s["recipe_id"])
+            if s["user_slot"] == "p1":
+                p1_swiped.append(rid)
+                if s["decision"] == "like":
+                    p1_likes.add(rid)
+            else:
+                p2_swiped.append(rid)
+                if s["decision"] == "like":
+                    p2_likes.add(rid)
+
+        matched_ids = sorted(p1_likes.intersection(p2_likes))
+        recipes_by_id = {r["id"]: r for r in self.list_recipes()}
+        matched_recipes = [recipes_by_id[rid] for rid in matched_ids if rid in recipes_by_id]
+
+        return {
+            "code": sess["code"],
+            "meal_type": sess["meal_type"],
+            "target_days": json.loads(sess["target_days_json"]),
+            "created_at": sess["created_at"],
+            "p1_swiped_ids": p1_swiped,
+            "p2_swiped_ids": p2_swiped,
+            "p1_like_count": len(p1_likes),
+            "p2_like_count": len(p2_likes),
+            "matches": matched_recipes,
+        }
+
+    def record_tinder_swipe(
+        self, code: str, user_slot: str, recipe_id: int, decision: str
+    ) -> dict[str, Any]:
+        clean_code = code.strip().upper()
+        slot = "p1" if user_slot.strip().lower() == "p1" else "p2"
+        dec = "like" if decision.strip().lower() == "like" else "pass"
+
+        with self.connect() as conn:
+            sess = conn.execute(
+                "SELECT code FROM tinder_sessions WHERE code = ?", (clean_code,)
+            ).fetchone()
+            if not sess:
+                raise ValueError(f"Nem található Páros Tinder szoba: {clean_code}")
+            conn.execute(
+                """
+                INSERT INTO tinder_swipes (session_code, user_slot, recipe_id, decision, swiped_at)
+                VALUES (?, ?, ?, ?, datetime('now'))
+                ON CONFLICT(session_code, user_slot, recipe_id) DO UPDATE SET
+                    decision = excluded.decision,
+                    swiped_at = datetime('now')
+                """,
+                (clean_code, slot, int(recipe_id), dec),
+            )
+
+        state = self.get_tinder_session(clean_code)
+        is_match = dec == "like" and any(m["id"] == int(recipe_id) for m in state["matches"])
+        matched_recipe = (
+            next((m for m in state["matches"] if m["id"] == int(recipe_id)), None)
+            if is_match
+            else None
+        )
+        return {
+            "is_match": is_match,
+            "matched_recipe": matched_recipe,
+            "session": state,
+        }

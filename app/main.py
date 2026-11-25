@@ -19,7 +19,9 @@ from app.kifli_mcp import KifliMCPManager
 from app.llm_agent import ChefShoppingAgent
 from app.media import save_recipe_image_bytes
 from app.otthon_mcp_server import OptionalPinASGIWrapper, create_otthon_mcp_server
+from app.private_label import execute_cart_swaps, optimize_cart_private_label_structured
 from app.scheduler_and_bot import BotAndSchedulerRuntime
+from app.smart_restock import analyze_smart_restock
 from starlette.routing import Route
 
 logging.basicConfig(
@@ -93,6 +95,38 @@ class ManualSlotSwapInput(BaseModel):
     recipe_id: int | None = None
     custom_title: str = ""
     clear: bool = False
+
+
+class PlannerSettingsInput(BaseModel):
+    weekly_budget_ft: int | None = None
+    allergens: list[str] | None = None
+    prefer_private_label: bool | None = None
+    prefer_discounts_and_save_food: bool | None = None
+    min_healthy_score: float | None = None
+    ai_recommendations_enabled: bool | None = None
+    ai_recommendation_count: int | None = None
+    ai_recommendation_meals: list[str] | None = None
+
+
+class TinderSessionCreateInput(BaseModel):
+    meal_type: str = "ebed"
+    target_days: list[str] = Field(default_factory=lambda: ["hetfo", "kedd"])
+
+
+class TinderSwipeInput(BaseModel):
+    user_slot: str = "p1"
+    recipe_id: int
+    decision: str = "like"
+
+
+class CartSwapItemInput(BaseModel):
+    old_product_id: int
+    new_product_id: int
+    new_quantity: int = 1
+
+
+class CartApplySwapsInput(BaseModel):
+    swaps: list[CartSwapItemInput] = Field(min_length=1)
 
 
 def create_app(custom_settings: Settings | None = None, enable_background: bool | None = None) -> FastAPI:
@@ -502,6 +536,75 @@ def create_app(custom_settings: Settings | None = None, enable_background: bool 
             return _parse_kifli_cart_payload(raw)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/kifli/cart/optimize-private-label", dependencies=[Depends(verify_pin)])
+    async def optimize_cart_private_label() -> dict[str, Any]:
+        try:
+            current_cart = await get_live_kifli_cart()
+            res = await optimize_cart_private_label_structured(
+                db=db, kifli=kifli, agent=agent, parsed_cart=current_cart
+            )
+            fresh_cart = await get_live_kifli_cart() if res["auto_swapped"] else current_cart
+            return {
+                "cart": fresh_cart,
+                "auto_swapped": res["auto_swapped"],
+                "auto_savings_ft": res["auto_savings_ft"],
+                "favorite_proposals": res["favorite_proposals"],
+                "message": res["message"],
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/kifli/cart/apply-swaps", dependencies=[Depends(verify_pin)])
+    async def apply_cart_swaps(payload: CartApplySwapsInput) -> dict[str, Any]:
+        try:
+            applied = await execute_cart_swaps(
+                kifli, [s.model_dump() for s in payload.swaps]
+            )
+            fresh_cart = await get_live_kifli_cart()
+            return {"applied_count": len(applied), "cart": fresh_cart}
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # --- Tervező Preferenciák (Büdzsé, Allergének, Sajátmárka, Akciók, Healthy) ---
+    @app.get("/api/planner-settings", dependencies=[Depends(verify_pin)])
+    async def get_planner_settings_api() -> dict[str, Any]:
+        return db.get_planner_settings()
+
+    @app.put("/api/planner-settings", dependencies=[Depends(verify_pin)])
+    async def update_planner_settings_api(payload: PlannerSettingsInput) -> dict[str, Any]:
+        return db.update_planner_settings(payload.model_dump(exclude_none=True))
+
+    # --- 🧠 Smart Restock (0 AI-tokenes fogyás-előrejelző) ---
+    @app.get("/api/smart-restock", dependencies=[Depends(verify_pin)])
+    async def get_smart_restock_api() -> dict[str, Any]:
+        return await analyze_smart_restock(db=db, kifli=kifli)
+
+    # --- 🔥 Páros Kaja Tinder Match (2 fős szinkronizált szobák) ---
+    @app.post("/api/tinder/sessions", dependencies=[Depends(verify_pin)])
+    async def create_tinder_session_api(payload: TinderSessionCreateInput) -> dict[str, Any]:
+        return db.create_tinder_session(
+            meal_type=payload.meal_type, target_days=payload.target_days
+        )
+
+    @app.get("/api/tinder/sessions/{code}", dependencies=[Depends(verify_pin)])
+    async def get_tinder_session_api(code: str) -> dict[str, Any]:
+        try:
+            return db.get_tinder_session(code)
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/tinder/sessions/{code}/swipe", dependencies=[Depends(verify_pin)])
+    async def swipe_tinder_session_api(code: str, payload: TinderSwipeInput) -> dict[str, Any]:
+        try:
+            return db.record_tinder_swipe(
+                code=code,
+                user_slot=payload.user_slot,
+                recipe_id=payload.recipe_id,
+                decision=payload.decision,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     uploads_dir = settings.data_dir / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)

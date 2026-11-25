@@ -196,6 +196,44 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
     def reset_weekly_menu() -> dict[str, Any]:
         return db.reset_weekly_plan()
 
+    @mcp.tool(
+        description="Lekéri az aktív heti tervező preferenciákat (heti büdzsé Ft, allergén tiltólista, Kifli sajátmárka előnyben, akció/Mentsd meg az ételt, min. Healthy Score)."
+    )
+    def get_planner_settings() -> dict[str, Any]:
+        return db.get_planner_settings()
+
+    @mcp.tool(
+        description=(
+            "Frissíti a heti tervező preferenciákat: weekly_budget_ft (0=nincs limit), "
+            "allergens (pl. ['laktóz', 'glutén']), prefer_private_label (bool), "
+            "prefer_discounts_and_save_food (bool), min_healthy_score (1.0..5.0), "
+            "ai_recommendations_enabled (bool: random +N AI receptajánlás ki/be), "
+            "ai_recommendation_count (1..7 db), ai_recommendation_meals (['reggeli', 'ebed', 'vacsora'] részhalmaza)."
+        )
+    )
+    def update_planner_settings(
+        weekly_budget_ft: int | None = None,
+        allergens: list[str] | None = None,
+        prefer_private_label: bool | None = None,
+        prefer_discounts_and_save_food: bool | None = None,
+        min_healthy_score: float | None = None,
+        ai_recommendations_enabled: bool | None = None,
+        ai_recommendation_count: int | None = None,
+        ai_recommendation_meals: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return db.update_planner_settings(
+            {
+                "weekly_budget_ft": weekly_budget_ft,
+                "allergens": allergens,
+                "prefer_private_label": prefer_private_label,
+                "prefer_discounts_and_save_food": prefer_discounts_and_save_food,
+                "min_healthy_score": min_healthy_score,
+                "ai_recommendations_enabled": ai_recommendations_enabled,
+                "ai_recommendation_count": ai_recommendation_count,
+                "ai_recommendation_meals": ai_recommendation_meals,
+            }
+        )
+
     @mcp.tool(description="Recept végleges törlése ID alapján.")
     def delete_recipe(recipe_id: int) -> dict[str, Any]:
         return {"deleted": db.delete_recipe(recipe_id), "recipe_id": recipe_id}

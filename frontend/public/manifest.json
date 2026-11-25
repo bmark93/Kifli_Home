@@ -1,8 +1,8 @@
 {
-  "name": "Kifli Otthon Séf",
-  "short_name": "KifliSéf",
+  "name": "Kifli Otthon",
+  "short_name": "KifliOtthon",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#090d16",
-  "theme_color": "#090d16"
+  "background_color": "#F6F6F2",
+  "theme_color": "#6FA014"
 }

@@ -23,7 +23,7 @@ FŐ SZABÁLYOK ÉS MŰKÖDÉS:
      * **KÖTELEZŐ KIFLI KÉSZLET-ELLENŐRZÉS:** Ha a Kifli MCP aktív, mielőtt elmented a menüt, ellenőrizd a `kifli__batch_search_products` eszközzel a kiszemelt receptek kulcsfontosságú/szezonális/speciális alapanyagait (pl. frankfurti levesnél a *kelkáposzta*, halas ételnél a hal, speciális zöldségek/gyümölcsök)! **Ha egy étel kulcs-alapanyaga jelenleg NINCS készleten vagy nem kapható a Kiflin, azt a receptet NE ajánld fel erre a hétre** — válassz helyette másik receptet, aminek minden fő hozzávalója elérhető! Ha emiatt kihagytál egy receptet, röviden jelezd a válaszodban!
      * **KIEGYENSÚLYOZOTT HEALTHY SCORE:** Figyelj rá, hogy a heti menü egészségesen kiegyensúlyozott legyen (a heti átlag `healthy_score` legyen legalább **3.3–3.5**)! Ne tegyél egymás után több 1–2-es nehéz ételt — ha az ebéd 2-es házias fogás, a reggeli vagy vacsora legyen 4–5-ös könnyű/egészséges!
      * Válogass változatosan a mentett receptekből (egy nagyobb főzős ebéd nyugodtan szerepelhet 2 egymást követő napon is, hogy praktikus és olcsó legyen!).
-     * Kötelezően tegyél bele **+1 db ÚJ receptajánlást** (`is_recommendation: true`, egy olyan finom és lehetőleg 4–5 healthy score-os ételt, ami még nincs a saját receptek között, a hozzávalói pedig tényleg kaphatók a Kiflin — töltsd ki hozzá a `custom_ingredients` hozzávalókat!).
+     * **AI ÚJ RECEPTAJÁNLÁS SZABÁLY:** Mindig az AKTÍV FELHASZNÁLÓI PREFERENCIÁK szerint járj el! Ha ki van kapcsolva az AI új receptajánlás, KIZÁRÓLAG a felhasználó saját mentett receptjeiből tervezhetsz (`is_recommendation: false`)! Ha be van kapcsolva, pontosan a beállított darabszámú és kizárólag a beállított étkezési kategóriákba (`reggeli` / `ebed` / `vacsora`) tegyél új ajánlást (`is_recommendation: true`, kitöltött `custom_ingredients`-szel, aminek minden hozzávalója kapható a Kiflin)!
      * Mindig mentsd el a kész tervet a `save_full_weekly_plan` eszközzel!
      * A javaslat végén mindig sorold fel az Általános / Háztartási listán szereplő `PENDING` tételeket is!
 
@@ -37,7 +37,9 @@ FŐ SZABÁLYOK ÉS MŰKÖDÉS:
    - Amikor a felhasználó kéri a Kifli kosár összeállítását:
      1) Először hívd meg a `get_aggregated_shopping_list` eszközt! Ez visszaadja az összevont recept+adhoc hozzávalókat, az Általános `PENDING` listát (`general_item_id`-val és esetleges `brand_hint` márkával), a mentett kedvenc Kifli termékeket (`preferred_kifli_product`), és a kamra-alapanyagokat (`staples_assumed_at_home`).
      2) A `staples_assumed_at_home` (pl. só, bors, olaj, liszt, pirospaprika) elemeket NE tedd be automatikusan a Kifli kosárba, csak a válaszod végén kérdezz rá egy sorban, hogy van-e otthon belőlük!
-     3) Használd a `kifli__batch_search_products` (egyszerre max 4 keresőkifejezés hívásonként; nyugodtan adj ki több párhuzamos tool-hívást egy körben!) és a `kifli__add_items_to_cart` eszközöket! Ha van `preferred_kifli_product` vagy `brand_hint` (pl. pontos tisztítószer márka), elsősorban azt keresd. Csak valós, MCP által visszaadott `productId`-ra hagyatkozz!
+     3) Használd a `kifli__batch_search_products` (egyszerre max 4 keresőkifejezés hívásonként; adj ki TÖBB párhuzamos `batch_search_products` hívást EGYETLEN körben, hogy a teljes bevásárlólista minden tételét azonnal megkeresd!) és a `kifli__add_items_to_cart` (EGYETLEN összefogott `items` tömbbel!) eszközöket!
+        - Mindig nézd meg a lista tételének `search_hint` és `diet_tags` mezőjét! Ha `diet_tags` tartalmazza a `"laktózmentes"` vagy `"gluténmentes"` jelzőt, KÖTELEZŐEN a `search_hint` alapján (pl. `"laktózmentes tej"`, `"laktózmentes tejföl"`) keress, SOHA ne hagyd ki a tételt, és SOHA ne tegyél be sima (nem mentes) tejterméket/tésztát!
+        - Ha van `preferred_kifli_product` vagy `brand_hint`, elsősorban azt keresd. Csak valós, MCP által visszaadott `productId`-ra hagyatkozz!
      4) KRITIKUS KISZERELÉS / DARABSZÁM SZABÁLY: A `kifli__add_items_to_cart` `quantity` mezője CSOMAG / DARAB számot vár, NEM grammot! Például:
         - Ha a listán `480 g zabpehely` szerepel, és a Kifli termék `500 g`-os csomag, akkor `quantity: 1` (1 csomag!), SOHA NE `480`!
         - Ha `30 db tojás` kell, és `10 db`-os dobozt találsz, akkor `quantity: 3` (3 doboz), SOHA NE `30`!
@@ -486,8 +488,59 @@ class ChefShoppingAgent:
             else "Kifli.hu MCP kapcsolat: NINCS BEJELENTKEZVE (menüt és listát tudsz tervezni, de a kosárba rakáshoz kérd meg a felhasználót, hogy lépjen be a Kifli MCP fülön)."
         )
 
+        ps = self.db.get_planner_settings()
+        pref_lines = ["AKTÍV FELHASZNÁLÓI PREFERENCIÁK (KÖTELEZŐ BETARTANI!):"]
+        if ps.get("weekly_budget_ft", 0) > 0:
+            pref_lines.append(
+                f"- HETI BÜDZSÉ KORLÁT: max. {ps['weekly_budget_ft']} Ft! "
+                "Menütervezésnél kerüld a drága alapanyagok (pl. lazac, marha, drága sajtok) halmozását, "
+                "kosárépítésnél pedig válaszd a kedvezőbb árú/akciós kiszereléseket, hogy beférjünk a keretbe! "
+                "Ha a végösszeg mégis túllépi, röviden emeld ki a 2-3 legdrágább tételt."
+            )
+        if ps.get("allergens"):
+            allerg_set = {a.lower() for a in ps["allergens"]}
+            diet_rules: list[str] = []
+            if "laktóz" in allerg_set:
+                diet_rules.append(
+                    "LAKTÓZMENTES DIÉTA: Minden tejtermékből (tej, tejföl, sajt, vaj, tejszín, joghurt, túró stb.) "
+                    "KÖTELEZŐEN **laktózmentes** (vagy növényi) terméket keress és tegyél a kosárba (pl. 'laktózmentes tej', 'laktózmentes tejföl')! "
+                    "SOHA NE hagyd ki a tejet/tejterméket emiatt a kosárból, és SOHA NE tegyél be sima laktózos tejfölt/tejet/sajtot!"
+                )
+            if "glutén" in allerg_set:
+                diet_rules.append(
+                    "GLUTÉNMENTES DIÉTA: Tészta, kenyér, liszt, nokedli esetén KÖTELEZŐEN **gluténmentes** változatot keress és tegyél a kosárba, ne hagyd ki őket!"
+                )
+            strict_ban = [a for a in ps["allergens"] if a.lower() not in ("laktóz", "glutén")]
+            if strict_ban:
+                diet_rules.append(
+                    f"TILTOTT ALLERGÉNEK: {', '.join(strict_ban)} — ezeket tartalmazó receptet és terméket TILOS választani (ellenőrizd `kifli__get_products_composition_batch`-csel ha bizonytalan)!"
+                )
+            pref_lines.append("- " + " ".join(diet_rules))
+        if ps.get("prefer_private_label"):
+            pref_lines.append(
+                "- KIFLI SAJÁTMÁRKA ELŐNYBEN: Ha a felhasználó nem adott meg konkrét kedvenc márkát, részesítsd előnyben a kiváló ár-érték arányú Kifli saját márkákat: **Miil** (tejtermék), **Moddia** (papíráru), **Yutto** (magvak/gabona), **Ubomi** (kávé/ital), **Dacello** (felvágott/hús), **Kitchin** (alapanyag/tészta/konzerv), **Pappudia** (készétel)!"
+            )
+        if ps.get("prefer_discounts_and_save_food"):
+            pref_lines.append(
+                "- AKCIÓK & 'MENTSD MEG AZ ÉTELT' FÓKUSZ: Heti menütervezésnél és kosárépítésnél nézd meg a `kifli__get_discounted_items` kínálatot is, és részesítsd előnyben az akciós / Mentsd meg az ételt termékeket!"
+            )
+        pref_lines.append(
+            f"- CÉL HETI ÁTLAG HEALTHY SCORE: legalább {ps.get('min_healthy_score', 3.4)} / 5.0!"
+        )
+        if ps.get("ai_recommendations_enabled", True):
+            rec_count = int(ps.get("ai_recommendation_count", 1) or 1)
+            rec_meals = ps.get("ai_recommendation_meals") or ["ebed"]
+            pref_lines.append(
+                f"- AI ÚJ RECEPTAJÁNLÁS: BEKAPCSOLVA! Pontosan **{rec_count} db** új, még nem mentett receptajánlást tegyél a heti menübe (`is_recommendation: true`), KIZÁRÓLAG ezekben a kategóriákban: **{', '.join(rec_meals)}**!"
+            )
+        else:
+            pref_lines.append(
+                "- AI ÚJ RECEPTAJÁNLÁS: KIKAPCSOLVA! NE találj ki új/random receptet, KIZÁRÓLAG a felhasználó saját mentett receptjeiből állítsd össze a teljes heti menüt (`is_recommendation: false` mindenhol)!"
+            )
+        prefs_block = "\n".join(pref_lines)
+
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": f"{SYSTEM_PROMPT_HU}\n\n[{status_hint}]"},
+            {"role": "system", "content": f"{SYSTEM_PROMPT_HU}\n\n[{status_hint}]\n\n{prefs_block}"},
         ]
         for h in history:
             if h["role"] in ("user", "assistant"):
@@ -547,14 +600,40 @@ class ChefShoppingAgent:
         return fallback
 
     async def generate_monday_weekly_proposal(self) -> str:
+        ps = self.db.get_planner_settings()
+        if ps.get("ai_recommendations_enabled", True):
+            rec_count = int(ps.get("ai_recommendation_count", 1) or 1)
+            rec_meals = ", ".join(ps.get("ai_recommendation_meals") or ["ebed"])
+            reco_instruction = (
+                f"+ pontosan **{rec_count} db** izgalmas ÚJ receptajánlással "
+                f"(`is_recommendation=true`, kizárólag `{rec_meals}` kategóriá(k)ban, "
+                "kitöltött `custom_ingredients`-szel, aminek minden hozzávalója kapható a Kiflin)"
+            )
+            reco_summary = f"emeld ki a 🌟 +{rec_count} új ajánlást ({rec_meals}), "
+        else:
+            reco_instruction = (
+                "KIZÁRÓLAG a saját mentett receptekből (NE tegyél bele új/random AI ötletet, mert ki van kapcsolva!)"
+            )
+            reco_summary = ""
+
         prompt = (
             "Készíts nekünk egy friss heti menütervezetet erre a hétre (Hétfőtől Vasárnapig: reggeli, ebéd, vacsora)! "
             "1) Nézd meg a mentett receptjeinket (`list_saved_recipes` — nézd a `healthy_score` értékeket is!) és az Általános/Háztartási listánkat (`get_current_weekly_plan`). "
             "2) Ha a Kifli MCP be van jelentkezve, KÖTELEZŐEN ellenőrizd a `kifli__batch_search_products` eszközzel a kiszemelt receptek fő/szezonális alapanyagait (pl. kelkáposzta, friss hal, speciális zöldség): ha egy fő hozzávaló NINCS készleten a Kiflin, NE ajánld fel azt az ételt erre a hétre! "
-            "3) Állítsd össze a heti menüt kiegyensúlyozott `healthy_score` elosztással (heti átlag >= 3.3, váltogasd a könnyű 4–5-ös és a házias 2–3-as ételeket) + pontosan 1 db izgalmas ÚJ receptajánlással (`is_recommendation=true`, kitöltött `custom_ingredients`-szel, aminek minden hozzávalója kapható a Kiflin), és mentsd el a `save_full_weekly_plan` eszközzel! "
-            "4) Köszönj nekünk, mutasd be áttekinthetően a heti menüt (röviden jelezve a heti átlag healthy score-t és ha valamit készlethiány miatt ki kellett hagyni), emeld ki a 🌟 +1 ajánlást, sorold fel mi van az 🧻 Általános listán, és kérdezd meg: 'Mit szólsz hozzá? Módosítsunk valamin, vagy összerakhatom a Kifli kosarat?'"
+            f"3) Állítsd össze a heti menüt kiegyensúlyozott `healthy_score` elosztással (heti átlag >= {ps.get('min_healthy_score', 3.4)}) {reco_instruction}, és mentsd el a `save_full_weekly_plan` eszközzel! "
+            f"4) Köszönj nekünk, mutasd be áttekinthetően a heti menüt (röviden jelezve a heti átlag healthy score-t és ha valamit készlethiány miatt ki kellett hagyni), {reco_summary}sorold fel mi van az 🧻 Általános listán, és kérdezd meg: 'Mit szólsz hozzá? Módosítsunk valamin, vagy összerakhatom a Kifli kosarat?'"
         )
         return await self.chat(prompt, source="scheduler")
+
+    async def optimize_cart_with_private_label(self) -> str:
+        prompt = (
+            "Nézd át a jelenlegi élő Kifli.hu kosaramat (`kifli__get_cart`), és keress olcsóbb, "
+            "jó minőségű **Kifli saját márkás** alternatívákat (Miil, Moddia, Yutto, Ubomi, Dacello, Kitchin, Pappudia) "
+            "vagy épp akciós helyettesítőket a drágább márkás termékek helyett (figyelve az aktív allergén szűrőkre és kedvenc márkákra)! "
+            "Cseréld le a kosárban azokat a tételeket, ahol érdemi (min. 10%) megtakarítás érhető el, "
+            "majd írd meg tételesen mit mire cseréltél, és pontosan hány Ft-ot spóroltunk vele!"
+        )
+        return await self.chat(prompt, source="web")
 
     async def parse_recipe_from_text_or_url(self, text_or_url: str) -> dict[str, Any]:
         """URL vagy bemásolt szöveg alapján strukturált receptet nyer ki és elmenti."""
