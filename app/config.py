@@ -25,6 +25,12 @@ class Settings:
     weekly_cron_minute: int
     app_access_pin: str
     mcp_access_token: str
+    app_secret_key: str
+    invite_code: str
+    demo_mode_enabled: bool
+    demo_daily_ai_limit: int
+    server_fallback_daily_ai_limit: int
+    auth_required: bool
     data_dir: Path
     port: int
 
@@ -82,6 +88,14 @@ def load_settings() -> Settings:
             os.getenv("MCP_ACCESS_TOKEN", "").strip()
             or os.getenv("APP_ACCESS_PIN", "").strip()
         ),
+        app_secret_key=os.getenv("APP_SECRET_KEY", "").strip(),
+        invite_code=os.getenv("INVITE_CODE", "").strip(),
+        demo_mode_enabled=os.getenv("DEMO_MODE_ENABLED", "true").strip().lower()
+        not in ("0", "false", "no"),
+        demo_daily_ai_limit=int(os.getenv("DEMO_DAILY_AI_LIMIT", "8")),
+        server_fallback_daily_ai_limit=int(os.getenv("SERVER_FALLBACK_DAILY_AI_LIMIT", "15")),
+        auth_required=os.getenv("AUTH_REQUIRED", "true").strip().lower()
+        not in ("0", "false", "no"),
         data_dir=data_dir,
         port=int(os.getenv("PORT", "8085")),
     )

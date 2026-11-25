@@ -31,12 +31,16 @@ import {
   Terminal,
   Flame,
   ImagePlus,
+  LogOut,
+  KeyRound,
 } from "lucide-react";
 import {
   apiFetch,
+  AuthRequiredError,
   formatFt,
   HEALTHY_META,
   uploadRecipeImage,
+  type AuthConfig,
   type ChatMessage,
   type GeneralItem,
   type Ingredient,
@@ -47,11 +51,13 @@ import {
   type Recipe,
   type SmartRestockResponse,
   type StatusInfo,
+  type UserProfile,
   type WeeklyPlanResponse,
 } from "./api";
 import { MealSwapSheet } from "./MealSwapSheet";
 import { FoodTinderSheet } from "./FoodTinderSheet";
 import { PrivateLabelSwapModal } from "./PrivateLabelSwapModal";
+import { LoginView } from "./LoginView";
 
 type TabId = "menu" | "chat" | "cart" | "general" | "recipes" | "settings";
 
@@ -116,6 +122,21 @@ function renderBold(str: string): React.ReactNode {
 }
 
 export default function App() {
+  const [authReady, setAuthReady] = useState(false);
+  const [authConfig, setAuthConfig] = useState<AuthConfig>({
+    auth_required: true,
+    demo_mode_enabled: true,
+    invite_required: false,
+    has_registered_users: true,
+  });
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+
+  // Per-user BYOK AI beállítások űrlap state
+  const [byokProvider, setByokProvider] = useState<string>("gemini");
+  const [byokModel, setByokModel] = useState<string>("gemini-3.1-flash-lite");
+  const [byokBaseUrl, setByokBaseUrl] = useState<string>("");
+  const [byokApiKey, setByokApiKey] = useState<string>("");
+
   const [activeTab, setActiveTab] = useState<TabId>("menu");
   const [selectedDay, setSelectedDay] = useState<string>(todayKey());
   const [showAllDays, setShowAllDays] = useState<boolean>(() =>
@@ -393,9 +414,70 @@ export default function App() {
     }
   }
 
+  async function bootstrapAuthAndLoad() {
+    try {
+      const cfg = await apiFetch<AuthConfig>("/api/auth/config");
+      setAuthConfig(cfg);
+      try {
+        const me = await apiFetch<UserProfile>("/api/auth/me");
+        setCurrentUser(me);
+        setByokProvider(me.llm.provider || "gemini");
+        setByokModel(me.llm.model || "gemini-3.1-flash-lite");
+        setByokBaseUrl(me.llm.base_url || "");
+        await Promise.all([loadCore(), loadRecipesAndSettings()]);
+      } catch (e: any) {
+        if (e instanceof AuthRequiredError) {
+          setCurrentUser(null);
+        }
+      }
+    } catch {
+      // silent
+    } finally {
+      setAuthReady(true);
+    }
+  }
+
+  async function handleLogout() {
+    await apiFetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    setCurrentUser(null);
+    setCart(null);
+    setWeekly(null);
+    setRecipes([]);
+    setChatMessages([]);
+    setGeneralItems([]);
+    const cfg = await apiFetch<AuthConfig>("/api/auth/config").catch(() => authConfig);
+    setAuthConfig(cfg);
+  }
+
+  async function handleSaveByok(clearKey = false) {
+    setBusyAction("byok");
+    try {
+      const updated = await apiFetch<UserProfile>("/api/auth/llm-settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          llm_provider: clearKey ? "" : byokProvider,
+          llm_model: clearKey ? "" : byokModel,
+          llm_base_url: clearKey ? "" : byokBaseUrl,
+          llm_api_key: clearKey ? "" : byokApiKey.trim() ? byokApiKey.trim() : null,
+        }),
+      });
+      setCurrentUser(updated);
+      setByokApiKey("");
+      await loadCore();
+      notify(
+        clearKey
+          ? "Saját AI kulcs törölve (visszaállt a szerver alapértelmezettjére)."
+          : "🔑 Saját AI API kulcs titkosítva elmentve!"
+      );
+    } catch (e: any) {
+      notify(e.message, "err");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
   useEffect(() => {
-    loadCore();
-    loadRecipesAndSettings();
+    bootstrapAuthAndLoad();
   }, []);
 
   useEffect(() => {
@@ -680,6 +762,42 @@ export default function App() {
     { id: "settings", label: "Kamra", icon: Settings2 },
   ];
 
+  if (!authReady) {
+    return (
+      <div className="min-h-[100dvh] bg-[#F6F6F2] dark:bg-[#121510] flex items-center justify-center">
+        <div className="text-center space-y-3">
+          <div className="w-14 h-14 mx-auto rounded-2xl bg-gradient-to-br from-[#7AB116] to-[#56800C] flex items-center justify-center text-3xl shadow-lg animate-pulse">
+            🥐
+          </div>
+          <div className="text-sm font-bold text-slate-600 dark:text-slate-300">
+            kifli.otthon betöltése...
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (authConfig.auth_required && !currentUser) {
+    return (
+      <LoginView
+        config={authConfig}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        onAuthenticated={async (u) => {
+          setCurrentUser(u);
+          setByokProvider(u.llm.provider || "gemini");
+          setByokModel(u.llm.model || "gemini-3.1-flash-lite");
+          setByokBaseUrl(u.llm.base_url || "");
+          await Promise.all([loadCore(), loadRecipesAndSettings()]);
+        }}
+      />
+    );
+  }
+
+  const personalMcpPath = currentUser?.mcp_token
+    ? `${window.location.origin}/mcp/${currentUser.mcp_token}`
+    : `${window.location.origin}/mcp`;
+
   return (
     <div className="min-h-[100dvh] bg-[#F6F6F2] text-[#1F241E] dark:bg-[#121510] dark:text-slate-100 flex flex-col lg:flex-row transition-colors duration-200">
       {/* TOAST ÉRTESÍTŐ */}
@@ -754,6 +872,28 @@ export default function App() {
 
         {status && (
           <div className="mt-auto pt-4 border-t border-slate-200 dark:border-white/5 space-y-2 text-xs text-slate-500 dark:text-slate-400">
+            {currentUser && (
+              <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-white/5">
+                <div className="min-w-0">
+                  <div className="font-bold text-slate-800 dark:text-white truncate">
+                    {currentUser.display_name}
+                  </div>
+                  <div className="text-[10px] truncate text-slate-400">
+                    {currentUser.is_demo ? "🎯 Demo Sandbox" : currentUser.email}
+                  </div>
+                </div>
+                {authConfig.auth_required && (
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    title="Kijelentkezés"
+                    className="p-1.5 rounded-lg hover:bg-rose-500/10 text-slate-400 hover:text-rose-500 transition"
+                  >
+                    <LogOut className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            )}
             <div className="flex items-center justify-between">
               <span>Kifli MCP</span>
               <span
@@ -763,7 +903,11 @@ export default function App() {
                     : "text-amber-600 dark:text-amber-400"
                 }
               >
-                {status.kifli.authenticated ? "● Élő" : "○ Belépés"}
+                {status.kifli.is_demo_sandbox
+                  ? "🎯 Demo"
+                  : status.kifli.authenticated
+                  ? "● Élő"
+                  : "○ Belépés"}
               </span>
             </div>
             <div className="flex items-center justify-between">
@@ -811,14 +955,55 @@ export default function App() {
                 : "bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-300"
             }`}
           >
-            {status?.kifli.authenticated ? "🥐 Kifli OK" : "⚠️ Kifli Login"}
+            {status?.kifli.is_demo_sandbox
+              ? "🎯 Demo"
+              : status?.kifli.authenticated
+              ? "🥐 Kifli OK"
+              : "⚠️ Kifli Login"}
           </span>
+
+          {authConfig.auth_required && currentUser && (
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="p-2 rounded-xl bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300"
+              title="Kijelentkezés"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </header>
 
       {/* FŐ TARTALOM — TELJES SZÉLESSÉGŰ WIDESCREEN RESZPONZÍV ELRENDEZÉS */}
       <main className="flex-1 lg:pl-64 xl:pl-68 pb-24 lg:pb-10 w-full">
         <div className="w-full max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8 2xl:px-10 pt-4 lg:pt-6">
+          {/* DEMO SANDBOX BANNER */}
+          {currentUser?.is_demo && (
+            <div className="mb-4 rounded-2xl bg-amber-50 dark:bg-amber-950/50 border border-amber-400/40 px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-900 dark:text-amber-100">
+              <span>
+                🎯 <strong>Interaktív Demo Mód:</strong> szabadon próbálgathatod a Kaja Tindert, a
+                szimulált Kifli kosarat és a Sajátmárka-optimalizálót! (Napi AI keret:{" "}
+                <strong>
+                  {status?.ai_daily_used || 0}/{status?.ai_daily_limit || 8}
+                </strong>
+                )
+              </span>
+              <button
+                type="button"
+                onClick={async () => {
+                  const fresh = await apiFetch<KifliCart>("/api/kifli/cart/demo-reset", {
+                    method: "POST",
+                  });
+                  setCart(fresh);
+                  notify("🔄 Demo Kifli kosár visszaállítva eredeti állapotba!");
+                }}
+                className="px-3 py-1 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 font-bold text-amber-900 dark:text-amber-200"
+              >
+                🔄 Demo kosár alaphelyzetbe
+              </button>
+            </div>
+          )}
           {/* =================================================================
               1. TAB: HETI MENÜ & ÖSSZESÍTETT BEVÁSÁRLÓLISTA (Widescreen 2-hasábos!)
              ================================================================= */}
@@ -2295,23 +2480,137 @@ export default function App() {
                 </div>
               </div>
 
-              {/* 5. Kártya (Teljes szélességű): SAJÁT KIFLI OTTHON MCP SZERVER CLAUDE-HOZ */}
+              {/* 5. Kártya: 🤖 SAJÁT AI API KULCS (BYOK — Multi-User) */}
+              <div className="lg:col-span-3 rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <KeyRound className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                    <div>
+                      <h3 className="font-bold text-base text-slate-900 dark:text-white">
+                        🤖 Saját AI API Kulcs (BYOK — Gemini / OpenAI / Ollama)
+                      </h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Ha megadod a saját API kulcsodat (AES titkosítva tároljuk!), korlátlanul és saját keretedből használhatod az AI séfet (~30–150 Ft/hó).
+                      </p>
+                    </div>
+                  </div>
+                  <span
+                    className={`text-xs font-bold px-3 py-1 rounded-full ${
+                      currentUser?.llm.using_own_key
+                        ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
+                        : "bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-slate-300"
+                    }`}
+                  >
+                    {currentUser?.llm.using_own_key
+                      ? `✅ Saját kulcs aktív (${currentUser.llm.masked_api_key})`
+                      : status?.ai_daily_limit
+                      ? `Szerver keret (${status.ai_daily_used || 0}/${status.ai_daily_limit}/nap)`
+                      : "Szerver kulcs aktív"}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-500 mb-1">
+                      Szolgáltató
+                    </label>
+                    <select
+                      value={byokProvider}
+                      onChange={(e) => {
+                        const p = e.target.value;
+                        setByokProvider(p);
+                        if (p === "gemini") setByokModel("gemini-3.1-flash-lite");
+                        else if (p === "openai") setByokModel("gpt-4.1-mini");
+                        else setByokModel("qwen2.5:14b");
+                      }}
+                      className="w-full bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white rounded-xl px-3 py-2.5 text-xs border border-slate-200 dark:border-white/10"
+                    >
+                      <option value="gemini">Google Gemini API</option>
+                      <option value="openai">OpenAI API</option>
+                      <option value="custom">Saját / Ollama (OpenAI-komp.)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-500 mb-1">Modell</label>
+                    <input
+                      type="text"
+                      value={byokModel}
+                      onChange={(e) => setByokModel(e.target.value)}
+                      placeholder="pl. gemini-3.1-flash-lite vagy gpt-4.1-mini"
+                      className="w-full bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white rounded-xl px-3 py-2.5 text-xs border border-slate-200 dark:border-white/10"
+                    />
+                  </div>
+
+                  <div className="md:col-span-2">
+                    <label className="block text-[11px] font-bold text-slate-500 mb-1">
+                      Saját API Kulcs {currentUser?.llm.masked_api_key ? `(mentve: ${currentUser.llm.masked_api_key})` : ""}
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        value={byokApiKey}
+                        onChange={(e) => setByokApiKey(e.target.value)}
+                        placeholder="AIzaSy... vagy sk-..."
+                        className="flex-1 bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white rounded-xl px-3 py-2.5 text-xs border border-slate-200 dark:border-white/10"
+                      />
+                      <button
+                        type="button"
+                        disabled={busyAction === "byok"}
+                        onClick={() => handleSaveByok(false)}
+                        className="px-4 py-2 rounded-xl bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950 font-bold text-xs shrink-0"
+                      >
+                        Mentés
+                      </button>
+                      {currentUser?.llm.using_own_key && (
+                        <button
+                          type="button"
+                          disabled={busyAction === "byok"}
+                          onClick={() => handleSaveByok(true)}
+                          className="px-3 py-2 rounded-xl bg-rose-500/15 text-rose-600 dark:text-rose-300 font-bold text-xs shrink-0"
+                        >
+                          Törlés
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 6. Kártya (Teljes szélességű): SAJÁT KIFLI OTTHON MCP SZERVER CLAUDE-HOZ */}
               <div className="lg:col-span-3 rounded-3xl bg-white dark:bg-[#1C2218] border border-emerald-500/30 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5">
                     <Terminal className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                     <div>
                       <h3 className="font-bold text-base text-slate-900 dark:text-white">
-                        🔌 Saját „Kifli Otthon” MCP Szerver (Claude Desktop / Claude Code / Cursor)
+                        🔌 Saját „Kifli Otthon” MCP Szerver (Claude mobil app / Desktop / Code)
                       </h3>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Kösd be a saját Claude-odba az M4 MacBookon (0 Gemini költséggel!), és kérheted közvetlenül Claude-tól is: „Vedd fel ezt a receptet ebédre” vagy „Tedd fel a Domestost a háztartási listára!”
+                        Személyes, csak a te fiókodhoz tartozó MCP végpontod — másold be a Claude Custom Connectorba!
                       </p>
                     </div>
                   </div>
-                  <span className="text-xs font-mono font-bold px-3 py-1.5 rounded-xl bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
-                    {`${window.location.origin}/mcp`}
-                  </span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-mono font-bold px-3 py-1.5 rounded-xl bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 break-all">
+                      {personalMcpPath}
+                    </span>
+                    {currentUser && !currentUser.is_demo && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const u = await apiFetch<UserProfile>("/api/auth/mcp-token/rotate", {
+                            method: "POST",
+                          });
+                          setCurrentUser(u);
+                          notify("🔑 Új személyes MCP kulcs generálva!");
+                        }}
+                        className="px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-white/10 text-xs font-semibold text-slate-600 dark:text-slate-300"
+                      >
+                        Új kulcs
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="relative">
@@ -2321,7 +2620,7 @@ export default function App() {
     mcpServers: {
       "kifli-otthon": {
         command: "npx",
-        args: ["-y", "mcp-remote", `${window.location.origin}/mcp`, "--allow-http"],
+        args: ["-y", "mcp-remote", personalMcpPath, "--allow-http"],
       },
     },
   },
@@ -2332,29 +2631,12 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      const cfg = JSON.stringify(
-                        {
-                          mcpServers: {
-                            "kifli-otthon": {
-                              command: "npx",
-                              args: [
-                                "-y",
-                                "mcp-remote",
-                                `${window.location.origin}/mcp`,
-                                "--allow-http",
-                              ],
-                            },
-                          },
-                        },
-                        null,
-                        2
-                      );
-                      navigator.clipboard.writeText(cfg);
-                      notify("📋 Claude Desktop MCP konfig a vágólapra másolva!");
+                      navigator.clipboard.writeText(personalMcpPath);
+                      notify("📋 Személyes MCP URL a vágólapra másolva!");
                     }}
                     className="absolute top-3 right-3 px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1.5 shadow"
                   >
-                    <Copy className="w-3.5 h-3.5" /> Másolás
+                    <Copy className="w-3.5 h-3.5" /> URL Másolása
                   </button>
                 </div>
               </div>

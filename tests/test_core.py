@@ -10,7 +10,13 @@ from app.kifli_mcp import KifliMCPManager, sanitize_json_schema_for_llm
 from app.main import create_app
 
 
-def _make_settings(tmp_path: Path, pin: str = "", mcp_token: str = "") -> Settings:
+def _make_settings(
+    tmp_path: Path,
+    pin: str = "",
+    mcp_token: str = "",
+    auth_required: bool = False,
+    invite_code: str = "",
+) -> Settings:
     return Settings(
         llm_provider="gemini",
         llm_base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
@@ -26,6 +32,12 @@ def _make_settings(tmp_path: Path, pin: str = "", mcp_token: str = "") -> Settin
         weekly_cron_minute=0,
         app_access_pin=pin,
         mcp_access_token=mcp_token or pin,
+        app_secret_key="unit-test-secret-key",
+        invite_code=invite_code,
+        demo_mode_enabled=True,
+        demo_daily_ai_limit=3,
+        server_fallback_daily_ai_limit=5,
+        auth_required=auth_required,
         data_dir=tmp_path,
         port=8085,
     )
@@ -544,3 +556,103 @@ def test_lactose_and_gluten_diet_substitution_in_shopping_list(tmp_path: Path) -
 
     # Nokedli gluténmentes címkét kap
     assert by_name["friss nokedli"]["diet_tags"] == ["gluténmentes"]
+
+
+def test_multi_user_auth_isolation_byok_and_demo_sandbox(tmp_path: Path) -> None:
+    settings = _make_settings(tmp_path, auth_required=True, invite_code="KIFLI2026")
+    app = create_app(custom_settings=settings, enable_background=False)
+
+    # Egyetlen TestClient lifespan, user-váltások között cookies.clear()-rel
+    with TestClient(app) as client:
+        # 1. Bejelentkezés nélkül 401
+        assert client.get("/api/recipes").status_code == 401
+        cfg = client.get("/api/auth/config").json()
+        assert cfg["auth_required"] is True
+        assert cfg["demo_mode_enabled"] is True
+
+        # 2. Első user (tulajdonos) regisztráció meghívókód nélkül -> id=1 admin
+        r1 = client.post(
+            "/api/auth/register",
+            json={
+                "email": "mark@example.com",
+                "password": "StrongPassword123",
+                "display_name": "Márk",
+            },
+        )
+        assert r1.status_code == 200
+        u1 = r1.json()
+        assert u1["id"] == 1
+        assert u1["is_admin"] is True
+
+        # Saját recept felvétele user 1-hez
+        client.post(
+            "/api/recipes",
+            json={
+                "title": "Márk Titkos Rakott Krumplija",
+                "categories": ["ebed"],
+                "ingredients": [{"name": "burgonya", "quantity": 1, "unit": "kg"}],
+            },
+        )
+
+        # Saját BYOK AI kulcs mentése titkosítva (maszkolva jön vissza!)
+        byok = client.put(
+            "/api/auth/llm-settings",
+            json={
+                "llm_provider": "openai",
+                "llm_model": "gpt-4.1-mini",
+                "llm_api_key": "sk-proj-TestSecretKey9876",
+            },
+        )
+        assert byok.status_code == 200
+        assert byok.json()["llm"]["using_own_key"] is True
+        assert "TestSecretKey" not in byok.json()["llm"]["masked_api_key"]
+
+        # 3. Második user rossz meghívókóddal 403, jó kóddal 200 — és NEM látja Márk receptjét!
+        client.cookies.clear()
+        bad = client.post(
+            "/api/auth/register",
+            json={
+                "email": "haver@example.com",
+                "password": "OtherPassword123",
+                "invite_code": "ROSSZ",
+            },
+        )
+        assert bad.status_code == 403
+
+        good = client.post(
+            "/api/auth/register",
+            json={
+                "email": "haver@example.com",
+                "password": "OtherPassword123",
+                "display_name": "Haver",
+                "invite_code": "KIFLI2026",
+            },
+        )
+        assert good.status_code == 200
+        assert good.json()["is_admin"] is False
+        u2_recipes = [r["title"] for r in client.get("/api/recipes").json()]
+        assert "Márk Titkos Rakott Krumplija" not in u2_recipes
+
+        # 4. 1-kattintásos Demo Sandbox belépés + szimulált Kifli kosár + Sajátmárka popup + AI limit
+        client.cookies.clear()
+        d = client.post("/api/auth/demo")
+        assert d.status_code == 200
+        assert d.json()["is_demo"] is True
+
+        demo_cart = client.get("/api/kifli/cart").json()
+        assert demo_cart["is_demo_sandbox"] is True
+        assert demo_cart["item_count"] >= 5
+
+        opt = client.post("/api/kifli/cart/optimize-private-label").json()
+        assert len(opt["auto_swapped"]) >= 2
+        assert len(opt["favorite_proposals"]) >= 1  # Zewa Deluxe és Magyar Tej kedvenc!
+
+        # Napi AI limit (demo_daily_ai_limit=3) tényleg leállítja a 4. hívást
+        demo_uid = d.json()["id"]
+        for _ in range(3):
+            app.state.agent.check_and_consume_ai_quota(user_id=demo_uid)
+        try:
+            app.state.agent.check_and_consume_ai_quota(user_id=demo_uid)
+            assert False, "Elvártuk a napi AI limit hibát!"
+        except RuntimeError as exc:
+            assert "napi 3" in str(exc).lower()

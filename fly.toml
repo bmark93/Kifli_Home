@@ -1,0 +1,38 @@
+# Fly.io deploy konfiguráció (~0-2$/hó tartós SQLite + uploads volume-mal, ingyenes HTTPS-sel!)
+# Indítás: fly launch --no-deploy && fly volumes create kifli_data --size 1 --region fra && fly deploy
+app = "kifli-otthon-demo"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8085"
+  DATA_DIR = "/app/data"
+  AUTH_REQUIRED = "true"
+  DEMO_MODE_ENABLED = "true"
+  DEMO_DAILY_AI_LIMIT = "8"
+  SERVER_FALLBACK_DAILY_AI_LIMIT = "15"
+  TIMEZONE = "Europe/Budapest"
+
+[mounts]
+  source = "kifli_data"
+  destination = "/app/data"
+
+[http_service]
+  internal_port = 8085
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    method = "get"
+    path = "/api/health"
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
