@@ -109,20 +109,20 @@ def compute_restock_predictions_from_events(
 
 
 async def analyze_smart_restock(
-    db: Database, kifli: KifliMCPManager
+    db: Database, kifli: KifliMCPManager | None, user_id: int = 1
 ) -> dict[str, Any]:
     """
     0 AI-tokenes elemzés: összefésüli a Kifli.hu korábbi rendeléseit (`fetch_orders`)
     és a helyi `general_items` (`ORDERED`) előzményeket.
     """
     active_keys = {
-        normalize_key(g["name"]) for g in db.list_general_items(include_ordered=False)
+        normalize_key(g["name"]) for g in db.list_general_items(include_ordered=False, user_id=user_id)
     }
     events: list[dict[str, Any]] = []
     kifli_orders_analyzed = 0
 
     # 1. Helyi ORDERED háztartási előzmények
-    for g in db.list_general_items(include_ordered=True):
+    for g in db.list_general_items(include_ordered=True, user_id=user_id):
         if g.get("status") == "ORDERED" and g.get("ordered_at"):
             events.append(
                 {
@@ -135,8 +135,8 @@ async def analyze_smart_restock(
             )
 
     # 2. Kifli.hu MCP korábbi rendelések (ha be van jelentkezve)
-    st = await kifli.get_status()
-    if st.get("authenticated"):
+    st = await kifli.get_status() if kifli is not None else {"authenticated": False}
+    if st.get("authenticated") and kifli is not None:
         try:
             raw = await kifli.call_tool_untruncated(
                 "fetch_orders",

@@ -4,17 +4,35 @@ import hmac
 import json
 import logging
 import os
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlencode
 
-from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse
+import httpx
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Request, Response, UploadFile
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.routing import Route
 
+from app.auth import (
+    SESSION_COOKIE_NAME,
+    SESSION_TTL_SECONDS,
+    create_session_token,
+    decrypt_secret,
+    encrypt_secret,
+    generate_personal_mcp_token,
+    hash_password,
+    load_or_create_secret,
+    mask_api_key,
+    verify_password,
+    verify_session_token,
+)
 from app.config import Settings, load_settings
 from app.db import Database
+from app.demo_sandbox import DemoCartSandbox
 from app.kifli_mcp import KifliMCPManager
 from app.llm_agent import ChefShoppingAgent
 from app.media import save_recipe_image_bytes
@@ -22,7 +40,6 @@ from app.otthon_mcp_server import OptionalPinASGIWrapper, create_otthon_mcp_serv
 from app.private_label import execute_cart_swaps, optimize_cart_private_label_structured
 from app.scheduler_and_bot import BotAndSchedulerRuntime
 from app.smart_restock import analyze_smart_restock
-from starlette.routing import Route
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,6 +47,25 @@ logging.basicConfig(
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+class RegisterInput(BaseModel):
+    email: str
+    password: str = Field(min_length=6)
+    display_name: str = ""
+    invite_code: str = ""
+
+
+class LoginInput(BaseModel):
+    email: str
+    password: str
+
+
+class UserLLMSettingsInput(BaseModel):
+    llm_provider: str = ""  # "", "gemini", "openai", "custom"
+    llm_model: str = ""
+    llm_base_url: str = ""
+    llm_api_key: str | None = None  # None = ne bántsa, "" = törölje a saját kulcsot
 
 
 class IngredientInput(BaseModel):
@@ -129,16 +165,39 @@ class CartApplySwapsInput(BaseModel):
     swaps: list[CartSwapItemInput] = Field(min_length=1)
 
 
-def create_app(custom_settings: Settings | None = None, enable_background: bool | None = None) -> FastAPI:
+def create_app(
+    custom_settings: Settings | None = None, enable_background: bool | None = None
+) -> FastAPI:
     settings = custom_settings or load_settings()
+    secret_key = load_or_create_secret(settings.data_dir, settings.app_secret_key)
     db = Database(settings.db_path)
-    kifli = KifliMCPManager(
-        mcp_url=settings.kifli_mcp_url,
-        redirect_uri=settings.kifli_oauth_redirect_uri,
-        oauth_dir=settings.kifli_oauth_dir,
+
+    # Per-user KifliMCPManager pool (user_id=1 a régi ./data/kifli_oauth mappát örökli!)
+    kifli_pool: dict[int, KifliMCPManager] = {}
+
+    def get_kifli_for_user(user_id: int) -> KifliMCPManager:
+        uid = int(user_id)
+        if uid not in kifli_pool:
+            oauth_dir = (
+                settings.kifli_oauth_dir
+                if uid == 1
+                else settings.kifli_oauth_dir / f"user_{uid}"
+            )
+            kifli_pool[uid] = KifliMCPManager(
+                mcp_url=settings.kifli_mcp_url,
+                redirect_uri=settings.kifli_oauth_redirect_uri,
+                oauth_dir=oauth_dir,
+            )
+        return kifli_pool[uid]
+
+    default_kifli = get_kifli_for_user(1)
+    demo_sandbox = DemoCartSandbox()
+    agent = ChefShoppingAgent(
+        settings=settings, db=db, kifli=default_kifli, secret_key=secret_key
     )
-    agent = ChefShoppingAgent(settings=settings, db=db, kifli=kifli)
-    runtime = BotAndSchedulerRuntime(settings=settings, db=db, kifli=kifli, agent=agent)
+    runtime = BotAndSchedulerRuntime(
+        settings=settings, db=db, kifli=default_kifli, agent=agent
+    )
     otthon_mcp, otthon_mcp_starlette = create_otthon_mcp_server(db=db, settings=settings)
 
     run_bg = (
@@ -158,18 +217,24 @@ def create_app(custom_settings: Settings | None = None, enable_background: bool 
                 if run_bg:
                     await runtime.stop()
 
-    app = FastAPI(title="Kifli Otthon — Menü & Bevásárló Asszisztens", lifespan=lifespan)
+    app = FastAPI(title="kifli.otthon — Multi-User Menü & Bevásárló Asszisztens", lifespan=lifespan)
     app.state.settings = settings
     app.state.db = db
-    app.state.kifli = kifli
+    app.state.kifli = default_kifli
     app.state.agent = agent
     app.state.runtime = runtime
     app.state.otthon_mcp = otthon_mcp
+    app.state.demo_sandbox = demo_sandbox
 
-    # Saját bejövő MCP végpont (Streamable HTTP: /mcp és /mcp/<TOKEN>) Claude Remote / Desktop számára!
+    # Saját bejövő MCP végpont (Streamable HTTP: /mcp és /mcp/<TOKEN>)
     for r in otthon_mcp_starlette.routes:
         if isinstance(r, Route) and r.path == "/mcp":
-            wrapped_mcp = OptionalPinASGIWrapper(r.endpoint, settings.mcp_access_token)
+            wrapped_mcp = OptionalPinASGIWrapper(
+                r.endpoint,
+                settings.mcp_access_token,
+                db=db,
+                require_token_always=settings.auth_required,
+            )
             app.router.routes.append(
                 Route("/mcp", endpoint=wrapped_mcp, methods=["GET", "POST", "DELETE", "OPTIONS", "HEAD"])
             )
@@ -183,40 +248,364 @@ def create_app(custom_settings: Settings | None = None, enable_background: bool 
                 Route("/mcp/{pin}/", endpoint=wrapped_mcp, methods=["GET", "POST", "DELETE", "OPTIONS", "HEAD"])
             )
 
-    async def verify_pin(
-        request: Request, x_app_pin: str | None = Header(default=None)
-    ) -> None:
-        expected = settings.app_access_pin
-        if not expected:
-            return
-        supplied = x_app_pin or request.cookies.get("app_pin", "")
-        if not supplied or not hmac.compare_digest(supplied, expected):
-            raise HTTPException(status_code=401, detail="Érvénytelen vagy hiányzó APP_ACCESS_PIN!")
+    def _set_session_cookie(response: Response, user_id: int, request: Request) -> None:
+        token = create_session_token(secret_key, user_id)
+        is_https = (
+            request.url.scheme == "https"
+            or request.headers.get("x-forwarded-proto", "").lower() == "https"
+        )
+        response.set_cookie(
+            key=SESSION_COOKIE_NAME,
+            value=token,
+            max_age=SESSION_TTL_SECONDS,
+            httponly=True,
+            samesite="lax",
+            secure=is_https,
+            path="/",
+        )
 
+    def _public_user_payload(user: dict[str, Any]) -> dict[str, Any]:
+        uid = int(user["id"])
+        llm_cfg = agent.resolve_llm_config_for_user(uid)
+        raw_user_key = (
+            decrypt_secret(secret_key, user.get("llm_api_key_enc") or "")
+            if user.get("llm_api_key_enc")
+            else ""
+        )
+        return {
+            "id": uid,
+            "email": user["email"],
+            "display_name": user["display_name"],
+            "is_admin": bool(user.get("is_admin")),
+            "is_demo": bool(user.get("is_demo")),
+            "mcp_token": user.get("mcp_token") or (settings.mcp_access_token if uid == 1 else ""),
+            "llm": {
+                "provider": llm_cfg["provider"],
+                "model": llm_cfg["model"],
+                "base_url": user.get("llm_base_url") or "",
+                "using_own_key": llm_cfg["using_own_key"],
+                "masked_api_key": mask_api_key(raw_user_key),
+                "daily_limit": llm_cfg["daily_limit"],
+                "daily_used": db.get_daily_ai_usage(uid),
+            },
+        }
+
+    async def get_current_user(
+        request: Request, x_app_pin: str | None = Header(default=None)
+    ) -> dict[str, Any]:
+        if not settings.auth_required:
+            # Egyszemélyes LAN mód (opcionális PIN védelemmel)
+            expected = settings.app_access_pin
+            if expected:
+                supplied = x_app_pin or request.cookies.get("app_pin", "")
+                if not supplied or not hmac.compare_digest(supplied, expected):
+                    raise HTTPException(
+                        status_code=401, detail="Érvénytelen vagy hiányzó APP_ACCESS_PIN!"
+                    )
+            u = db.get_user_by_id(1)
+            if u:
+                return u
+            return {
+                "id": 1,
+                "email": "local@kifli.otthon",
+                "display_name": "Otthoni Fiók",
+                "is_admin": 1,
+                "is_demo": 0,
+                "llm_provider": "",
+                "llm_model": "",
+                "llm_base_url": "",
+                "llm_api_key_enc": "",
+                "mcp_token": settings.mcp_access_token,
+            }
+
+        cookie_token = request.cookies.get(SESSION_COOKIE_NAME, "")
+        uid = verify_session_token(secret_key, cookie_token)
+        if uid is None:
+            raise HTTPException(status_code=401, detail="Bejelentkezés szükséges!")
+        user = db.get_user_by_id(uid)
+        if not user:
+            raise HTTPException(status_code=401, detail="Érvénytelen munkamenet!")
+        return user
+
+    # --- Health & Auth ---
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
         return {"ok": True}
 
-    @app.get("/api/status", dependencies=[Depends(verify_pin)])
-    async def status() -> dict[str, Any]:
+    @app.get("/api/auth/config")
+    async def auth_config() -> dict[str, Any]:
         return {
-            "llm_provider": settings.llm_provider,
-            "llm_model": settings.llm_model,
-            "llm_key_configured": bool(
-                settings.llm_api_key and "IDE_JON" not in settings.llm_api_key
+            "auth_required": settings.auth_required,
+            "demo_mode_enabled": settings.demo_mode_enabled,
+            "google_login_enabled": bool(
+                settings.google_client_id and settings.google_client_secret
             ),
+            "invite_required": bool(settings.invite_code) and db.count_real_users() > 0,
+            "has_registered_users": db.count_real_users() > 0,
+        }
+
+    def _resolve_google_redirect_uri(request: Request) -> str:
+        if settings.google_redirect_uri:
+            return settings.google_redirect_uri
+        proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+        host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+        return f"{proto}://{host}/api/auth/google/callback"
+
+    @app.get("/api/auth/google/login")
+    async def google_oauth_login(request: Request) -> RedirectResponse:
+        if not settings.google_client_id or not settings.google_client_secret:
+            raise HTTPException(
+                status_code=400, detail="A Google bejelentkezés még nincs beállítva a .env-ben."
+            )
+        state = secrets.token_urlsafe(24)
+        redirect_uri = _resolve_google_redirect_uri(request)
+        params = urlencode(
+            {
+                "client_id": settings.google_client_id,
+                "redirect_uri": redirect_uri,
+                "response_type": "code",
+                "scope": "openid email profile",
+                "state": state,
+                "prompt": "select_account",
+            }
+        )
+        resp = RedirectResponse(
+            url=f"https://accounts.google.com/o/oauth2/v2/auth?{params}",
+            status_code=302,
+        )
+        is_https = (
+            request.url.scheme == "https"
+            or request.headers.get("x-forwarded-proto", "").lower() == "https"
+        )
+        resp.set_cookie(
+            key="kifli_google_state",
+            value=state,
+            max_age=600,
+            httponly=True,
+            samesite="lax",
+            secure=is_https,
+            path="/",
+        )
+        return resp
+
+    @app.get("/api/auth/google/callback")
+    async def google_oauth_callback(
+        request: Request,
+        code: str = "",
+        state: str = "",
+        error: str = "",
+    ) -> RedirectResponse:
+        def _err_redirect(msg: str) -> RedirectResponse:
+            r = RedirectResponse(url=f"/?{urlencode({'auth_error': msg})}", status_code=302)
+            r.delete_cookie("kifli_google_state", path="/")
+            return r
+
+        if error:
+            return _err_redirect(f"Google belépés megszakítva ({error}).")
+        expected_state = request.cookies.get("kifli_google_state", "")
+        if not state or not expected_state or not hmac.compare_digest(state, expected_state):
+            return _err_redirect("Lejárt vagy érvénytelen Google belépési munkamenet. Próbáld újra!")
+        if not code:
+            return _err_redirect("Hiányzó Google hitelesítési kód.")
+
+        redirect_uri = _resolve_google_redirect_uri(request)
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                tok_resp = await client.post(
+                    "https://oauth2.googleapis.com/token",
+                    data={
+                        "code": code,
+                        "client_id": settings.google_client_id,
+                        "client_secret": settings.google_client_secret,
+                        "redirect_uri": redirect_uri,
+                        "grant_type": "authorization_code",
+                    },
+                )
+                if tok_resp.status_code != 200:
+                    return _err_redirect("Google token csere sikertelen (ellenőrizd a Redirect URI-t!).")
+                access_token = tok_resp.json().get("access_token", "")
+                info_resp = await client.get(
+                    "https://openidconnect.googleapis.com/v1/userinfo",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+                if info_resp.status_code != 200:
+                    return _err_redirect("Nem sikerült lekérni a Google profil adatait.")
+                profile = info_resp.json()
+        except Exception as exc:
+            logging.getLogger("kifli_otthon.auth").warning("Google OAuth hiba: %s", exc)
+            return _err_redirect("Hálózati hiba a Google bejelentkezés közben.")
+
+        email = str(profile.get("email") or "").strip().lower()
+        if not email or profile.get("email_verified") is False:
+            return _err_redirect("Csak megerősített Google e-mail címmel lehet belépni.")
+
+        if settings.allowed_google_emails and email not in settings.allowed_google_emails:
+            return _err_redirect("Ez a Google e-mail cím nincs engedélyezve ezen a szerveren.")
+
+        user = db.get_user_by_email(email)
+        if not user:
+            is_first_real_user = db.count_real_users() == 0
+            force_id = 1 if (is_first_real_user and db.get_user_by_id(1) is None) else None
+            mcp_tok = (
+                settings.mcp_access_token
+                if (force_id == 1 and settings.mcp_access_token)
+                else generate_personal_mcp_token()
+            )
+            user = db.create_user(
+                email=email,
+                display_name=str(profile.get("name") or email.split("@")[0]),
+                password_hash=hash_password(secrets.token_urlsafe(32)),
+                is_admin=is_first_real_user,
+                is_demo=False,
+                mcp_token=mcp_tok,
+                force_id=force_id,
+            )
+
+        resp = RedirectResponse(url="/", status_code=302)
+        resp.delete_cookie("kifli_google_state", path="/")
+        _set_session_cookie(resp, int(user["id"]), request)
+        return resp
+
+    @app.get("/api/auth/me")
+    async def auth_me(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+        return _public_user_payload(user)
+
+    @app.post("/api/auth/register")
+    async def auth_register(
+        payload: RegisterInput, request: Request, response: Response
+    ) -> dict[str, Any]:
+        email = payload.email.strip().lower()
+        if "@" not in email or "." not in email.split("@")[-1]:
+            raise HTTPException(status_code=400, detail="Adj meg egy érvényes e-mail címet!")
+        if db.get_user_by_email(email):
+            raise HTTPException(status_code=400, detail="Ezzel az e-mail címmel már létezik fiók!")
+
+        is_first_real_user = db.count_real_users() == 0
+        if not is_first_real_user and settings.invite_code:
+            if not hmac.compare_digest(payload.invite_code.strip(), settings.invite_code):
+                raise HTTPException(
+                    status_code=403, detail="Érvénytelen vagy hiányzó meghívókód!"
+                )
+
+        # Az első regisztráló tulajdonos megkapja a user_id=1 fiókot (és az összes meglévő NAS receptet!)
+        force_id = 1 if (is_first_real_user and db.get_user_by_id(1) is None) else None
+        mcp_tok = (
+            settings.mcp_access_token
+            if (force_id == 1 and settings.mcp_access_token)
+            else generate_personal_mcp_token()
+        )
+        user = db.create_user(
+            email=email,
+            display_name=payload.display_name or email.split("@")[0],
+            password_hash=hash_password(payload.password),
+            is_admin=is_first_real_user,
+            is_demo=False,
+            mcp_token=mcp_tok,
+            force_id=force_id,
+        )
+        _set_session_cookie(response, int(user["id"]), request)
+        return _public_user_payload(user)
+
+    @app.post("/api/auth/login")
+    async def auth_login(
+        payload: LoginInput, request: Request, response: Response
+    ) -> dict[str, Any]:
+        user = db.get_user_by_email(payload.email)
+        if not user or not verify_password(payload.password, user["password_hash"]):
+            raise HTTPException(status_code=401, detail="Hibás e-mail cím vagy jelszó!")
+        _set_session_cookie(response, int(user["id"]), request)
+        return _public_user_payload(user)
+
+    @app.post("/api/auth/demo")
+    async def auth_demo_login(request: Request, response: Response) -> dict[str, Any]:
+        if not settings.demo_mode_enabled:
+            raise HTTPException(status_code=403, detail="A Demo mód ki van kapcsolva.")
+        demo_user = db.ensure_demo_user(
+            password_hash=hash_password(generate_personal_mcp_token()),
+            mcp_token=generate_personal_mcp_token(),
+        )
+        _set_session_cookie(response, int(demo_user["id"]), request)
+        return _public_user_payload(demo_user)
+
+    @app.post("/api/auth/logout")
+    async def auth_logout(response: Response) -> dict[str, Any]:
+        response.delete_cookie(SESSION_COOKIE_NAME, path="/")
+        return {"ok": True}
+
+    @app.put("/api/auth/llm-settings")
+    async def update_my_llm_settings(
+        payload: UserLLMSettingsInput,
+        user: dict[str, Any] = Depends(get_current_user),
+    ) -> dict[str, Any]:
+        uid = int(user["id"])
+        enc_key: str | None = None
+        if payload.llm_api_key is not None:
+            enc_key = (
+                encrypt_secret(secret_key, payload.llm_api_key)
+                if payload.llm_api_key.strip()
+                else ""
+            )
+        updated = db.update_user_llm_settings(
+            user_id=uid,
+            llm_provider=payload.llm_provider,
+            llm_model=payload.llm_model,
+            llm_base_url=payload.llm_base_url,
+            llm_api_key_enc=enc_key,
+        )
+        return _public_user_payload(updated)
+
+    @app.post("/api/auth/mcp-token/rotate")
+    async def rotate_my_mcp_token(
+        user: dict[str, Any] = Depends(get_current_user),
+    ) -> dict[str, Any]:
+        updated = db.rotate_user_mcp_token(int(user["id"]), generate_personal_mcp_token())
+        return _public_user_payload(updated)
+
+    # --- Status ---
+    @app.get("/api/status")
+    async def status(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+        uid = int(user["id"])
+        is_demo = bool(user.get("is_demo"))
+        llm_cfg = agent.resolve_llm_config_for_user(uid)
+        kifli_status = (
+            {
+                "mcp_url": "demo://sandbox.kifli.hu",
+                "authenticated": True,
+                "has_refresh_token": True,
+                "pending_login_url": None,
+                "cached_tool_count": 18,
+                "last_error": "",
+                "is_demo_sandbox": True,
+            }
+            if is_demo
+            else await get_kifli_for_user(uid).get_status()
+        )
+        return {
+            "llm_provider": llm_cfg["provider"],
+            "llm_model": llm_cfg["model"],
+            "llm_key_configured": bool(
+                llm_cfg["api_key"] and "IDE_JON" not in llm_cfg["api_key"]
+            ),
+            "using_own_key": llm_cfg["using_own_key"],
+            "ai_daily_limit": llm_cfg["daily_limit"],
+            "ai_daily_used": db.get_daily_ai_usage(uid),
             "telegram_configured": bool(settings.telegram_bot_token),
             "cron_schedule": f"{settings.weekly_cron_day.upper()} {settings.weekly_cron_hour:02d}:{settings.weekly_cron_minute:02d} ({settings.timezone})",
-            "kifli": await kifli.get_status(),
+            "kifli": kifli_status,
+            "user": _public_user_payload(user),
         }
 
     # --- Receptek ---
-    @app.get("/api/recipes", dependencies=[Depends(verify_pin)])
-    async def get_recipes(category: str | None = None) -> list[dict[str, Any]]:
-        return db.list_recipes(category=category)
+    @app.get("/api/recipes")
+    async def get_recipes(
+        category: str | None = None, user: dict[str, Any] = Depends(get_current_user)
+    ) -> list[dict[str, Any]]:
+        return db.list_recipes(category=category, user_id=int(user["id"]))
 
-    @app.post("/api/recipes", dependencies=[Depends(verify_pin)])
-    async def create_recipe(payload: RecipeInput) -> dict[str, Any]:
+    @app.post("/api/recipes")
+    async def create_recipe(
+        payload: RecipeInput, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
         return db.create_or_update_recipe(
             title=payload.title,
             categories=payload.categories,
@@ -226,25 +615,34 @@ def create_app(custom_settings: Settings | None = None, enable_background: bool 
             image_url=payload.image_url,
             healthy_score=payload.healthy_score,
             ingredients=[i.model_dump() for i in payload.ingredients],
+            user_id=int(user["id"]),
         )
 
-    @app.put("/api/recipes/{recipe_id}", dependencies=[Depends(verify_pin)])
-    async def update_recipe(recipe_id: int, payload: RecipeInput) -> dict[str, Any]:
-        return db.create_or_update_recipe(
-            recipe_id=recipe_id,
-            title=payload.title,
-            categories=payload.categories,
-            servings=payload.servings,
-            instructions=payload.instructions,
-            source_url=payload.source_url,
-            image_url=payload.image_url,
-            healthy_score=payload.healthy_score,
-            ingredients=[i.model_dump() for i in payload.ingredients],
-        )
+    @app.put("/api/recipes/{recipe_id}")
+    async def update_recipe(
+        recipe_id: int, payload: RecipeInput, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
+        try:
+            return db.create_or_update_recipe(
+                recipe_id=recipe_id,
+                title=payload.title,
+                categories=payload.categories,
+                servings=payload.servings,
+                instructions=payload.instructions,
+                source_url=payload.source_url,
+                image_url=payload.image_url,
+                healthy_score=payload.healthy_score,
+                ingredients=[i.model_dump() for i in payload.ingredients],
+                user_id=int(user["id"]),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    @app.post("/api/recipes/{recipe_id}/image", dependencies=[Depends(verify_pin)])
+    @app.post("/api/recipes/{recipe_id}/image")
     async def upload_recipe_image(
-        recipe_id: int, file: UploadFile = File(...)
+        recipe_id: int,
+        file: UploadFile = File(...),
+        user: dict[str, Any] = Depends(get_current_user),
     ) -> dict[str, Any]:
         try:
             content = await file.read()
@@ -254,66 +652,87 @@ def create_app(custom_settings: Settings | None = None, enable_background: bool 
                 mime_type=file.content_type or "",
                 filename=file.filename or "",
             )
-            return db.set_recipe_image(recipe_id, saved_url)
+            return db.set_recipe_image(recipe_id, saved_url, user_id=int(user["id"]))
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.delete("/api/recipes/{recipe_id}/image", dependencies=[Depends(verify_pin)])
-    async def delete_recipe_image(recipe_id: int) -> dict[str, Any]:
+    @app.delete("/api/recipes/{recipe_id}/image")
+    async def delete_recipe_image(
+        recipe_id: int, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
         try:
-            return db.set_recipe_image(recipe_id, "")
+            return db.set_recipe_image(recipe_id, "", user_id=int(user["id"]))
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.delete("/api/recipes/{recipe_id}", dependencies=[Depends(verify_pin)])
-    async def remove_recipe(recipe_id: int) -> dict[str, Any]:
-        return {"deleted": db.delete_recipe(recipe_id)}
+    @app.delete("/api/recipes/{recipe_id}")
+    async def remove_recipe(
+        recipe_id: int, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
+        return {"deleted": db.delete_recipe(recipe_id, user_id=int(user["id"]))}
 
-    @app.post("/api/recipes/import", dependencies=[Depends(verify_pin)])
-    async def import_recipe(payload: RecipeImportInput) -> dict[str, Any]:
+    @app.post("/api/recipes/import")
+    async def import_recipe(
+        payload: RecipeImportInput, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
         try:
-            return await agent.parse_recipe_from_text_or_url(payload.text_or_url)
+            return await agent.parse_recipe_from_text_or_url(
+                payload.text_or_url, user_id=int(user["id"])
+            )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # --- Általános / Háztartási egyszeri lista ---
-    @app.get("/api/general-items", dependencies=[Depends(verify_pin)])
-    async def get_general_items(include_ordered: bool = False) -> list[dict[str, Any]]:
-        return db.list_general_items(include_ordered=include_ordered)
+    @app.get("/api/general-items")
+    async def get_general_items(
+        include_ordered: bool = False, user: dict[str, Any] = Depends(get_current_user)
+    ) -> list[dict[str, Any]]:
+        return db.list_general_items(include_ordered=include_ordered, user_id=int(user["id"]))
 
-    @app.post("/api/general-items", dependencies=[Depends(verify_pin)])
-    async def post_general_item(payload: GeneralItemInput) -> dict[str, Any]:
+    @app.post("/api/general-items")
+    async def post_general_item(
+        payload: GeneralItemInput, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
         return db.add_general_item(
             name=payload.name,
             quantity=payload.quantity,
             unit=payload.unit,
             brand_hint=payload.brand_hint,
+            user_id=int(user["id"]),
         )
 
-    @app.delete("/api/general-items/{item_id}", dependencies=[Depends(verify_pin)])
-    async def remove_general_item(item_id: int) -> dict[str, Any]:
-        return {"deleted": db.delete_general_item(item_id)}
+    @app.delete("/api/general-items/{item_id}")
+    async def remove_general_item(
+        item_id: int, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
+        return {"deleted": db.delete_general_item(item_id, user_id=int(user["id"]))}
 
-    @app.post("/api/general-items/confirm-order", dependencies=[Depends(verify_pin)])
-    async def confirm_order(payload: ConfirmOrderInput) -> dict[str, Any]:
+    @app.post("/api/general-items/confirm-order")
+    async def confirm_order(
+        payload: ConfirmOrderInput, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
         return db.finalize_order_and_clear_general_items(
-            include_pending_if_forced=payload.include_pending
+            include_pending_if_forced=payload.include_pending, user_id=int(user["id"])
         )
 
-    @app.post("/api/general-items/revert-cart", dependencies=[Depends(verify_pin)])
-    async def revert_cart_items() -> dict[str, Any]:
-        return {"reverted": db.revert_in_cart_general_items_to_pending()}
+    @app.post("/api/general-items/revert-cart")
+    async def revert_cart_items(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+        return {"reverted": db.revert_in_cart_general_items_to_pending(user_id=int(user["id"]))}
 
     # --- Heti Menü & Összesített Bevásárlólista ---
-    @app.get("/api/weekly-plan", dependencies=[Depends(verify_pin)])
-    async def get_weekly_plan() -> dict[str, Any]:
+    @app.get("/api/weekly-plan")
+    async def get_weekly_plan(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+        uid = int(user["id"])
         return {
-            "plan": db.get_weekly_plan(),
-            "aggregated_shopping": db.aggregate_shopping_list(),
+            "plan": db.get_weekly_plan(user_id=uid),
+            "aggregated_shopping": db.aggregate_shopping_list(user_id=uid),
         }
 
-    @app.put("/api/weekly-plan/slot", dependencies=[Depends(verify_pin)])
-    async def manual_swap_weekly_slot(payload: ManualSlotSwapInput) -> dict[str, Any]:
+    @app.put("/api/weekly-plan/slot")
+    async def manual_swap_weekly_slot(
+        payload: ManualSlotSwapInput, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
+        uid = int(user["id"])
         try:
             updated_plan = db.set_weekly_meal_slots_manual(
                 day_keys=payload.days,
@@ -321,110 +740,160 @@ def create_app(custom_settings: Settings | None = None, enable_background: bool 
                 recipe_id=payload.recipe_id,
                 custom_title=payload.custom_title,
                 clear=payload.clear,
+                user_id=uid,
             )
             return {
                 "plan": updated_plan,
-                "aggregated_shopping": db.aggregate_shopping_list(),
+                "aggregated_shopping": db.aggregate_shopping_list(user_id=uid),
             }
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.post("/api/weekly-plan/reset", dependencies=[Depends(verify_pin)])
-    async def reset_weekly_plan() -> dict[str, Any]:
+    @app.post("/api/weekly-plan/reset")
+    async def reset_weekly_plan(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+        uid = int(user["id"])
         return {
-            "plan": db.reset_weekly_plan(),
-            "aggregated_shopping": db.aggregate_shopping_list(),
+            "plan": db.reset_weekly_plan(user_id=uid),
+            "aggregated_shopping": db.aggregate_shopping_list(user_id=uid),
         }
 
-    @app.post("/api/weekly-plan/generate", dependencies=[Depends(verify_pin)])
-    async def trigger_weekly_plan_generation() -> dict[str, Any]:
+    @app.post("/api/weekly-plan/generate")
+    async def trigger_weekly_plan_generation(
+        user: dict[str, Any] = Depends(get_current_user),
+    ) -> dict[str, Any]:
+        uid = int(user["id"])
+        is_demo = bool(user.get("is_demo"))
         try:
-            proposal_text = await agent.generate_monday_weekly_proposal()
+            proposal_text = await agent.generate_monday_weekly_proposal(
+                user_id=uid,
+                kifli_client=None if is_demo else get_kifli_for_user(uid),
+                is_demo=is_demo,
+            )
             return {
                 "proposal": proposal_text,
-                "plan": db.get_weekly_plan(),
-                "aggregated_shopping": db.aggregate_shopping_list(),
+                "plan": db.get_weekly_plan(user_id=uid),
+                "aggregated_shopping": db.aggregate_shopping_list(user_id=uid),
             }
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # --- Chat ---
-    @app.get("/api/chat", dependencies=[Depends(verify_pin)])
-    async def get_chat_messages() -> list[dict[str, Any]]:
-        return db.get_recent_chat_messages(limit=30)
+    @app.get("/api/chat")
+    async def get_chat_messages(
+        user: dict[str, Any] = Depends(get_current_user),
+    ) -> list[dict[str, Any]]:
+        return db.get_recent_chat_messages(limit=30, user_id=int(user["id"]))
 
-    @app.post("/api/chat", dependencies=[Depends(verify_pin)])
-    async def send_chat_message(payload: ChatInput) -> dict[str, Any]:
+    @app.post("/api/chat")
+    async def send_chat_message(
+        payload: ChatInput, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
+        uid = int(user["id"])
+        is_demo = bool(user.get("is_demo"))
         try:
-            reply = await agent.chat(payload.message, source="web")
+            reply = await agent.chat(
+                payload.message,
+                source="web",
+                user_id=uid,
+                kifli_client=None if is_demo else get_kifli_for_user(uid),
+                is_demo=is_demo,
+            )
             return {
                 "reply": reply,
-                "plan": db.get_weekly_plan(),
-                "general_items": db.list_general_items(),
+                "plan": db.get_weekly_plan(user_id=uid),
+                "general_items": db.list_general_items(user_id=uid),
             }
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.delete("/api/chat", dependencies=[Depends(verify_pin)])
-    async def reset_chat() -> dict[str, Any]:
-        db.clear_chat_history()
+    @app.delete("/api/chat")
+    async def reset_chat(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+        db.clear_chat_history(user_id=int(user["id"]))
         return {"cleared": True}
 
     # --- Kamra & Kedvenc Kifli termékek ---
-    @app.get("/api/staples", dependencies=[Depends(verify_pin)])
-    async def get_staples() -> list[dict[str, str]]:
-        return db.list_staples()
+    @app.get("/api/staples")
+    async def get_staples(user: dict[str, Any] = Depends(get_current_user)) -> list[dict[str, str]]:
+        return db.list_staples(user_id=int(user["id"]))
 
-    @app.post("/api/staples", dependencies=[Depends(verify_pin)])
-    async def create_staple(payload: StapleInput) -> list[dict[str, str]]:
-        db.add_staple(payload.name)
-        return db.list_staples()
+    @app.post("/api/staples")
+    async def create_staple(
+        payload: StapleInput, user: dict[str, Any] = Depends(get_current_user)
+    ) -> list[dict[str, str]]:
+        uid = int(user["id"])
+        db.add_staple(payload.name, user_id=uid)
+        return db.list_staples(user_id=uid)
 
-    @app.delete("/api/staples/{key}", dependencies=[Depends(verify_pin)])
-    async def remove_staple(key: str) -> dict[str, Any]:
-        return {"deleted": db.delete_staple(key)}
+    @app.delete("/api/staples/{key}")
+    async def remove_staple(
+        key: str, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
+        return {"deleted": db.delete_staple(key, user_id=int(user["id"]))}
 
-    @app.get("/api/preferences", dependencies=[Depends(verify_pin)])
-    async def get_preferences() -> list[dict[str, Any]]:
-        return db.list_product_preferences()
+    @app.get("/api/preferences")
+    async def get_preferences(
+        user: dict[str, Any] = Depends(get_current_user),
+    ) -> list[dict[str, Any]]:
+        return db.list_product_preferences(user_id=int(user["id"]))
 
-    @app.post("/api/preferences", dependencies=[Depends(verify_pin)])
-    async def create_preference(payload: PreferenceInput) -> dict[str, Any]:
+    @app.post("/api/preferences")
+    async def create_preference(
+        payload: PreferenceInput, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
         return db.save_product_preference(
             ingredient_name=payload.ingredient_name,
             kifli_product_id=payload.kifli_product_id,
             kifli_product_name=payload.kifli_product_name,
+            user_id=int(user["id"]),
         )
 
-    @app.delete("/api/preferences/{key}", dependencies=[Depends(verify_pin)])
-    async def remove_preference(key: str) -> dict[str, Any]:
-        return {"deleted": db.delete_product_preference(key)}
+    @app.delete("/api/preferences/{key}")
+    async def remove_preference(
+        key: str, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
+        return {"deleted": db.delete_product_preference(key, user_id=int(user["id"]))}
 
-    # --- Kifli.hu OAuth 2.1 MCP ---
-    @app.post("/api/kifli/login", dependencies=[Depends(verify_pin)])
-    async def start_kifli_login() -> dict[str, Any]:
+    # --- Kifli.hu OAuth 2.1 MCP (Per-User + Demo Sandbox!) ---
+    @app.post("/api/kifli/login")
+    async def start_kifli_login(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+        if user.get("is_demo"):
+            raise HTTPException(
+                status_code=400,
+                detail="Demo módban szimulált Kifli kosár fut. Saját Kifli fiók összekötéséhez regisztrálj saját fiókot!",
+            )
         try:
-            url = await kifli.start_login_flow()
+            url = await get_kifli_for_user(int(user["id"])).start_login_flow()
             return {"login_url": url}
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.post("/api/kifli/callback", dependencies=[Depends(verify_pin)])
-    async def complete_kifli_login(payload: KifliCallbackInput) -> dict[str, Any]:
+    @app.post("/api/kifli/callback")
+    async def complete_kifli_login(
+        payload: KifliCallbackInput, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
         try:
-            return await kifli.submit_callback_url(payload.callback_url)
+            return await get_kifli_for_user(int(user["id"])).submit_callback_url(
+                payload.callback_url
+            )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.post("/api/kifli/logout", dependencies=[Depends(verify_pin)])
-    async def logout_kifli() -> dict[str, Any]:
-        await kifli.logout()
-        return await kifli.get_status()
+    @app.post("/api/kifli/logout")
+    async def logout_kifli(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+        if user.get("is_demo"):
+            return {"authenticated": True, "is_demo_sandbox": True}
+        km = get_kifli_for_user(int(user["id"]))
+        await km.logout()
+        return await km.get_status()
 
-    @app.get("/api/kifli/tools", dependencies=[Depends(verify_pin)])
-    async def list_kifli_tools() -> list[dict[str, Any]]:
+    @app.get("/api/kifli/tools")
+    async def list_kifli_tools(
+        user: dict[str, Any] = Depends(get_current_user),
+    ) -> list[dict[str, Any]]:
+        if user.get("is_demo"):
+            return []
         try:
-            return await kifli.list_tools(force_refresh=True)
+            return await get_kifli_for_user(int(user["id"])).list_tools(force_refresh=True)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -476,9 +945,11 @@ def create_app(custom_settings: Settings | None = None, enable_background: bool 
             "items": parsed_items,
         }
 
-    @app.get("/api/kifli/cart", dependencies=[Depends(verify_pin)])
-    async def get_live_kifli_cart() -> dict[str, Any]:
-        st = await kifli.get_status()
+    async def _fetch_user_cart(user: dict[str, Any]) -> dict[str, Any]:
+        if user.get("is_demo"):
+            return demo_sandbox.get_cart()
+        km = get_kifli_for_user(int(user["id"]))
+        st = await km.get_status()
         if not st["authenticated"]:
             return {
                 "connected": False,
@@ -489,27 +960,33 @@ def create_app(custom_settings: Settings | None = None, enable_background: bool 
                 "total_units": 0,
                 "items": [],
             }
+        raw = await km.call_tool_untruncated(
+            "get_cart", {"context": "Display current shopping cart in home assistant UI"}
+        )
+        return _parse_kifli_cart_payload(raw)
+
+    @app.get("/api/kifli/cart")
+    async def get_live_kifli_cart(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
         try:
-            raw = await kifli.call_tool_untruncated(
-                "get_cart", {"context": "Display current shopping cart in home assistant UI"}
-            )
-            return _parse_kifli_cart_payload(raw)
+            return await _fetch_user_cart(user)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.post("/api/kifli/cart/update", dependencies=[Depends(verify_pin)])
-    async def update_live_kifli_cart_item(payload: CartItemUpdateInput) -> dict[str, Any]:
+    @app.post("/api/kifli/cart/update")
+    async def update_live_kifli_cart_item(
+        payload: CartItemUpdateInput, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
+        if user.get("is_demo"):
+            return demo_sandbox.update_item(payload.product_id, payload.quantity)
+        km = get_kifli_for_user(int(user["id"]))
         try:
             if payload.quantity <= 0:
-                await kifli.call_tool_untruncated(
+                await km.call_tool_untruncated(
                     "remove_cart_item",
-                    {
-                        "product_id": payload.product_id,
-                        "context": "User removed item from cart in UI",
-                    },
+                    {"product_id": payload.product_id, "context": "User removed item from cart"},
                 )
             else:
-                await kifli.call_tool_untruncated(
+                await km.call_tool_untruncated(
                     "update_cart_item",
                     {
                         "product_id": payload.product_id,
@@ -517,34 +994,45 @@ def create_app(custom_settings: Settings | None = None, enable_background: bool 
                         "context": "User adjusted item quantity in UI",
                     },
                 )
-            raw = await kifli.call_tool_untruncated(
-                "get_cart", {"context": "Refresh shopping cart after quantity update"}
-            )
-            return _parse_kifli_cart_payload(raw)
+            return await _fetch_user_cart(user)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.post("/api/kifli/cart/clear", dependencies=[Depends(verify_pin)])
-    async def clear_live_kifli_cart() -> dict[str, Any]:
+    @app.post("/api/kifli/cart/clear")
+    async def clear_live_kifli_cart(
+        user: dict[str, Any] = Depends(get_current_user),
+    ) -> dict[str, Any]:
+        if user.get("is_demo"):
+            return demo_sandbox.clear()
+        km = get_kifli_for_user(int(user["id"]))
         try:
-            await kifli.call_tool_untruncated(
+            await km.call_tool_untruncated(
                 "clear_cart", {"context": "User requested clearing the shopping cart"}
             )
-            raw = await kifli.call_tool_untruncated(
-                "get_cart", {"context": "Refresh empty cart"}
-            )
-            return _parse_kifli_cart_payload(raw)
+            return await _fetch_user_cart(user)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.post("/api/kifli/cart/optimize-private-label", dependencies=[Depends(verify_pin)])
-    async def optimize_cart_private_label() -> dict[str, Any]:
+    @app.post("/api/kifli/cart/demo-reset")
+    async def reset_demo_cart(user: dict[str, Any] = Depends(get_current_user)) -> dict[str, Any]:
+        if not user.get("is_demo"):
+            raise HTTPException(status_code=403, detail="Csak Demo módban elérhető.")
+        return demo_sandbox.reset()
+
+    @app.post("/api/kifli/cart/optimize-private-label")
+    async def optimize_cart_private_label(
+        user: dict[str, Any] = Depends(get_current_user),
+    ) -> dict[str, Any]:
+        uid = int(user["id"])
+        if user.get("is_demo"):
+            return demo_sandbox.optimize_private_label(db=db, user_id=uid)
+        km = get_kifli_for_user(uid)
         try:
-            current_cart = await get_live_kifli_cart()
+            current_cart = await _fetch_user_cart(user)
             res = await optimize_cart_private_label_structured(
-                db=db, kifli=kifli, agent=agent, parsed_cart=current_cart
+                db=db, kifli=km, agent=agent, parsed_cart=current_cart, user_id=uid
             )
-            fresh_cart = await get_live_kifli_cart() if res["auto_swapped"] else current_cart
+            fresh_cart = await _fetch_user_cart(user) if res["auto_swapped"] else current_cart
             return {
                 "cart": fresh_cart,
                 "auto_swapped": res["auto_swapped"],
@@ -555,47 +1043,103 @@ def create_app(custom_settings: Settings | None = None, enable_background: bool 
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    @app.post("/api/kifli/cart/apply-swaps", dependencies=[Depends(verify_pin)])
-    async def apply_cart_swaps(payload: CartApplySwapsInput) -> dict[str, Any]:
+    @app.post("/api/kifli/cart/apply-swaps")
+    async def apply_cart_swaps(
+        payload: CartApplySwapsInput, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
+        if user.get("is_demo"):
+            return demo_sandbox.apply_swaps([s.model_dump() for s in payload.swaps])
+        km = get_kifli_for_user(int(user["id"]))
         try:
-            applied = await execute_cart_swaps(
-                kifli, [s.model_dump() for s in payload.swaps]
-            )
-            fresh_cart = await get_live_kifli_cart()
+            applied = await execute_cart_swaps(km, [s.model_dump() for s in payload.swaps])
+            fresh_cart = await _fetch_user_cart(user)
             return {"applied_count": len(applied), "cart": fresh_cart}
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # --- Tervező Preferenciák (Büdzsé, Allergének, Sajátmárka, Akciók, Healthy) ---
-    @app.get("/api/planner-settings", dependencies=[Depends(verify_pin)])
-    async def get_planner_settings_api() -> dict[str, Any]:
-        return db.get_planner_settings()
+    # --- Tervező Preferenciák ---
+    @app.get("/api/planner-settings")
+    async def get_planner_settings_api(
+        user: dict[str, Any] = Depends(get_current_user),
+    ) -> dict[str, Any]:
+        return db.get_planner_settings(user_id=int(user["id"]))
 
-    @app.put("/api/planner-settings", dependencies=[Depends(verify_pin)])
-    async def update_planner_settings_api(payload: PlannerSettingsInput) -> dict[str, Any]:
-        return db.update_planner_settings(payload.model_dump(exclude_none=True))
-
-    # --- 🧠 Smart Restock (0 AI-tokenes fogyás-előrejelző) ---
-    @app.get("/api/smart-restock", dependencies=[Depends(verify_pin)])
-    async def get_smart_restock_api() -> dict[str, Any]:
-        return await analyze_smart_restock(db=db, kifli=kifli)
-
-    # --- 🔥 Páros Kaja Tinder Match (2 fős szinkronizált szobák) ---
-    @app.post("/api/tinder/sessions", dependencies=[Depends(verify_pin)])
-    async def create_tinder_session_api(payload: TinderSessionCreateInput) -> dict[str, Any]:
-        return db.create_tinder_session(
-            meal_type=payload.meal_type, target_days=payload.target_days
+    @app.put("/api/planner-settings")
+    async def update_planner_settings_api(
+        payload: PlannerSettingsInput, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
+        return db.update_planner_settings(
+            payload.model_dump(exclude_none=True), user_id=int(user["id"])
         )
 
-    @app.get("/api/tinder/sessions/{code}", dependencies=[Depends(verify_pin)])
-    async def get_tinder_session_api(code: str) -> dict[str, Any]:
+    # --- 🧠 Smart Restock ---
+    @app.get("/api/smart-restock")
+    async def get_smart_restock_api(
+        user: dict[str, Any] = Depends(get_current_user),
+    ) -> dict[str, Any]:
+        uid = int(user["id"])
+        if user.get("is_demo"):
+            return {
+                "kifli_connected": True,
+                "kifli_orders_analyzed": 8,
+                "local_events_analyzed": 4,
+                "suggestions": [
+                    {
+                        "name": "Ubomi 100% Arabica szemes kávé 500 g",
+                        "kifli_product_id": "99101",
+                        "brand_hint": "Ubomi",
+                        "source": "demo_orders",
+                        "order_count": 4,
+                        "avg_interval_days": 21.0,
+                        "days_since_last": 23.0,
+                        "due_ratio": 1.1,
+                        "urgency": "overdue",
+                        "reason": "Átlagosan 21 naponta veszed · 23 napja vetted utoljára",
+                    },
+                    {
+                        "name": "Moddia 3 rétegű WC-papír 16 tekercs",
+                        "kifli_product_id": "115386",
+                        "brand_hint": "Moddia",
+                        "source": "demo_orders",
+                        "order_count": 5,
+                        "avg_interval_days": 18.0,
+                        "days_since_last": 16.0,
+                        "due_ratio": 0.89,
+                        "urgency": "soon",
+                        "reason": "Átlagosan 18 naponta veszed · 16 napja vetted utoljára",
+                    },
+                ],
+            }
+        return await analyze_smart_restock(
+            db=db, kifli=get_kifli_for_user(uid), user_id=uid
+        )
+
+    # --- 🔥 Páros Kaja Tinder Match ---
+    @app.post("/api/tinder/sessions")
+    async def create_tinder_session_api(
+        payload: TinderSessionCreateInput, user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
+        return db.create_tinder_session(
+            meal_type=payload.meal_type,
+            target_days=payload.target_days,
+            owner_user_id=int(user["id"]),
+        )
+
+    @app.get("/api/tinder/sessions/{code}")
+    async def get_tinder_session_api(
+        code: str, _user: dict[str, Any] = Depends(get_current_user)
+    ) -> dict[str, Any]:
         try:
             return db.get_tinder_session(code)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    @app.post("/api/tinder/sessions/{code}/swipe", dependencies=[Depends(verify_pin)])
-    async def swipe_tinder_session_api(code: str, payload: TinderSwipeInput) -> dict[str, Any]:
+    @app.post("/api/tinder/sessions/{code}/swipe")
+    async def swipe_tinder_session_api(
+        code: str,
+        payload: TinderSwipeInput,
+        _user: dict[str, Any] = Depends(get_current_user),
+    ) -> dict[str, Any]:
         try:
             return db.record_tinder_swipe(
                 code=code,

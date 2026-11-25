@@ -1,7 +1,43 @@
+export interface AuthConfig {
+  auth_required: boolean;
+  demo_mode_enabled: boolean;
+  google_login_enabled: boolean;
+  invite_required: boolean;
+  has_registered_users: boolean;
+}
+
+export interface UserProfile {
+  id: number;
+  email: string;
+  display_name: string;
+  is_admin: boolean;
+  is_demo: boolean;
+  mcp_token: string;
+  llm: {
+    provider: string;
+    model: string;
+    base_url: string;
+    using_own_key: boolean;
+    masked_api_key: string;
+    daily_limit: number;
+    daily_used: number;
+  };
+}
+
+export class AuthRequiredError extends Error {
+  constructor(msg = "Bejelentkezés szükséges") {
+    super(msg);
+    this.name = "AuthRequiredError";
+  }
+}
+
 export interface StatusInfo {
   llm_provider: string;
   llm_model: string;
   llm_key_configured: boolean;
+  using_own_key?: boolean;
+  ai_daily_limit?: number;
+  ai_daily_used?: number;
   telegram_configured: boolean;
   cron_schedule: string;
   kifli: {
@@ -11,7 +47,9 @@ export interface StatusInfo {
     pending_login_url: string | null;
     cached_tool_count: number;
     last_error: string;
+    is_demo_sandbox?: boolean;
   };
+  user?: UserProfile;
 }
 
 export interface MealSlot {
@@ -161,6 +199,7 @@ export interface KifliCartItem {
 
 export interface KifliCart {
   connected: boolean;
+  is_demo_sandbox?: boolean;
   cart_id?: number;
   total_price: number;
   total_savings: number;
@@ -252,13 +291,10 @@ export async function apiFetch<T>(path: string, options: RequestInit = {}): Prom
   const savedPin = localStorage.getItem("app_pin");
   if (savedPin) headers["X-App-Pin"] = savedPin;
 
-  const res = await fetch(path, { ...options, headers });
+  const res = await fetch(path, { credentials: "include", ...options, headers });
   if (res.status === 401) {
-    const pin = window.prompt("Add meg az APP_ACCESS_PIN kódot:");
-    if (pin !== null) {
-      localStorage.setItem("app_pin", pin);
-      return apiFetch<T>(path, options);
-    }
+    const err = await res.json().catch(() => ({ detail: "Bejelentkezés szükséges!" }));
+    throw new AuthRequiredError(err.detail || "Bejelentkezés szükséges!");
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));

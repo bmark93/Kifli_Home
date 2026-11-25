@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import hmac
 from typing import Any
 
@@ -13,17 +14,21 @@ from app.config import Settings
 from app.db import DAYS_HU, Database
 from app.media import download_and_save_recipe_image, save_recipe_image_base64
 
+CURRENT_MCP_USER_ID: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "current_mcp_user_id", default=1
+)
+
 
 class OptionalPinASGIWrapper:
     """
-    Claude Remote MCP & Streamable HTTP kompatibilitási + biztonsági réteg:
-    1. Külön MCP_ACCESS_TOKEN ellenőrzés (path: /mcp/<TOKEN>, Bearer, X-App-Pin vagy ?pin=),
-       így a belső LAN Web UI nem kér PIN-t, ha csak MCP_ACCESS_TOKEN van beállítva.
+    Claude Remote MCP & Streamable HTTP kompatibilitási + Multi-User biztonsági réteg:
+    1. Token feloldása (path: /mcp/<TOKEN>, Bearer, X-App-Pin vagy ?pin=):
+       - Ha egyezik egy regisztrált felhasználó személyes `mcp_token`-jével -> az ő `user_id`-ja!
+       - Ha egyezik a globális `MCP_ACCESS_TOKEN`-nel -> `user_id = 1`.
+       - Ha sem globális token nincs, sem AUTH_REQUIRED -> `user_id = 1`.
     2. OPTIONS (CORS preflight) -> azonnali 204 No Content.
-    3. GET / DELETE -> azonnali 405 Method Not Allowed (stateless módban a mcp SDK GET-re
-       végtelen üres SSE streamet nyitna, amin a Claude Remote MCP időtúllépéssel elhasal!).
-    4. POST Accept fejléc normalizálás -> akkor is azonnali 200 OK application/json választ ad,
-       ha a kliens csak `Accept: */*` vagy `Accept: application/json` fejlécet küld.
+    3. GET / DELETE -> azonnali 405 Method Not Allowed (nincs lógó üres SSE stream).
+    4. POST Accept fejléc normalizálás -> azonnali 200 OK application/json válasz.
     """
 
     CORS_HEADERS = {
@@ -33,9 +38,17 @@ class OptionalPinASGIWrapper:
         "Access-Control-Expose-Headers": "Mcp-Session-Id",
     }
 
-    def __init__(self, app: ASGIApp, expected_token: str) -> None:
+    def __init__(
+        self,
+        app: ASGIApp,
+        expected_token: str,
+        db: Database | None = None,
+        require_token_always: bool = False,
+    ) -> None:
         self.app = app
         self.expected_token = expected_token
+        self.db = db
+        self.require_token_always = require_token_always
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http":
@@ -44,27 +57,36 @@ class OptionalPinASGIWrapper:
 
         method = str(scope.get("method", "GET")).upper()
 
-        # 1. CORS preflight azonnal
         if method == "OPTIONS":
             resp = JSONResponse({}, status_code=204, headers=self.CORS_HEADERS)
             await resp(scope, receive, send)
             return
 
-        # 2. Token ellenőrzés (ha MCP_ACCESS_TOKEN be van állítva)
         path_params = scope.get("path_params") or {}
         path_token = str(path_params.get("pin", "")).strip("/")
 
-        if self.expected_token:
-            req = Request(scope)
-            auth_hdr = req.headers.get("authorization", "")
-            bearer = auth_hdr[7:].strip() if auth_hdr.lower().startswith("bearer ") else ""
-            supplied = (
-                path_token
-                or bearer
-                or req.headers.get("x-app-pin", "").strip()
-                or req.query_params.get("pin", "").strip()
-            )
-            if not supplied or not hmac.compare_digest(supplied, self.expected_token):
+        req = Request(scope)
+        auth_hdr = req.headers.get("authorization", "")
+        bearer = auth_hdr[7:].strip() if auth_hdr.lower().startswith("bearer ") else ""
+        supplied = (
+            path_token
+            or bearer
+            or req.headers.get("x-app-pin", "").strip()
+            or req.query_params.get("pin", "").strip()
+        )
+
+        resolved_user_id: int | None = None
+        if supplied and self.db is not None:
+            user = self.db.get_user_by_mcp_token(supplied)
+            if user:
+                resolved_user_id = int(user["id"])
+
+        if resolved_user_id is None and self.expected_token:
+            if supplied and hmac.compare_digest(supplied, self.expected_token):
+                resolved_user_id = 1
+
+        if resolved_user_id is None:
+            if self.expected_token or self.require_token_always:
                 resp = JSONResponse(
                     {"error": "Unauthorized: missing or invalid MCP_ACCESS_TOKEN"},
                     status_code=401,
@@ -72,9 +94,8 @@ class OptionalPinASGIWrapper:
                 )
                 await resp(scope, receive, send)
                 return
+            resolved_user_id = 1
 
-        # 3. Stateless Streamable HTTP: GET/DELETE-re azonnali 405 (ahogy a hivatalos Kifli MCP is!)
-        #    Különben a Claude Remote MCP GET SSE streamje 0 bájttal örökre lógna és timeoutolna.
         if method in ("GET", "DELETE", "HEAD"):
             resp = JSONResponse(
                 {"error": "Method Not Allowed: use POST for stateless MCP Streamable HTTP"},
@@ -84,8 +105,6 @@ class OptionalPinASGIWrapper:
             await resp(scope, receive, send)
             return
 
-        # 4. Path normalizálás (/mcp/<TOKEN> -> /mcp) + Accept fejléc normalizálás
-        #    (hogy `Accept: */*` vagy hiányzó Accept esetén se lógjon/dobjon 406-ot az MCP SDK!)
         new_scope = dict(scope)
         if path_token or str(scope.get("path", "")).rstrip("/") == "/mcp":
             new_scope["path"] = "/mcp"
@@ -105,7 +124,11 @@ class OptionalPinASGIWrapper:
                 message = {**message, "headers": hdrs}
             await send(message)
 
-        await self.app(new_scope, receive, _send_with_cors)
+        token_ctx = CURRENT_MCP_USER_ID.set(resolved_user_id)
+        try:
+            await self.app(new_scope, receive, _send_with_cors)
+        finally:
+            CURRENT_MCP_USER_ID.reset(token_ctx)
 
 
 def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServer, Any]:
@@ -119,12 +142,15 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
         version="2.0.0",
     )
 
+    def _uid() -> int:
+        return CURRENT_MCP_USER_ID.get()
+
     @mcp.tool(
         description="Kilistázza az elmentett saját recepteket hozzávalókkal. Opcionális category szűrő: 'reggeli', 'ebed' vagy 'vacsora'."
     )
     def list_recipes(category: str = "") -> list[dict[str, Any]]:
         cat = category.strip().lower() or None
-        return db.list_recipes(category=cat)
+        return db.list_recipes(category=cat, user_id=_uid())
 
     @mcp.tool(
         description=(
@@ -156,12 +182,13 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
             recipe_id=recipe_id,
             healthy_score=healthy_score,
             image_url=image_url,
+            user_id=_uid(),
         )
 
     @mcp.tool(
         description=(
             "Kép feltöltése vagy beállítása egy meglévő recepthez (recipe_id alapján). "
-            "Megadhatsz publikus image_url-t (letölti és lokálisan eltárolja a NAS-on!) VAGY közvetlen image_base64 képadatot."
+            "Megadhatsz publikus image_url-t (letölti és lokálisan eltárolja) VAGY közvetlen image_base64 képadatot."
         )
     )
     async def set_recipe_image(
@@ -170,45 +197,45 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
         image_base64: str = "",
         mime_type: str = "image/jpeg",
     ) -> dict[str, Any]:
+        uid = _uid()
         if image_base64.strip():
             saved_path = save_recipe_image_base64(
                 settings.data_dir, image_base64, mime_type=mime_type
             )
-            return db.set_recipe_image(recipe_id, saved_path)
+            return db.set_recipe_image(recipe_id, saved_path, user_id=uid)
         if image_url.strip():
             try:
                 saved_path = await download_and_save_recipe_image(
                     settings.data_dir, image_url.strip()
                 )
-                return db.set_recipe_image(recipe_id, saved_path)
+                return db.set_recipe_image(recipe_id, saved_path, user_id=uid)
             except Exception:
-                # Ha a külső szerver nem engedi letölteni, eltároljuk közvetlen URL-ként
-                return db.set_recipe_image(recipe_id, image_url.strip())
+                return db.set_recipe_image(recipe_id, image_url.strip(), user_id=uid)
         raise ValueError("Adj meg image_url vagy image_base64 értéket!")
 
     @mcp.tool(
         description="Recept egészségességi pontszámának (healthy_score) beállítása 1 (nehéz/bűnözős) és 5 (nagyon egészséges) között."
     )
     def set_recipe_healthy_score(recipe_id: int, healthy_score: int) -> dict[str, Any]:
-        return db.set_recipe_healthy_score(recipe_id, healthy_score)
+        return db.set_recipe_healthy_score(recipe_id, healthy_score, user_id=_uid())
 
     @mcp.tool(description="Teljes aktuális heti menü visszaállítása üresre (reset).")
     def reset_weekly_menu() -> dict[str, Any]:
-        return db.reset_weekly_plan()
+        return db.reset_weekly_plan(user_id=_uid())
 
     @mcp.tool(
         description="Lekéri az aktív heti tervező preferenciákat (heti büdzsé Ft, allergén tiltólista, Kifli sajátmárka előnyben, akció/Mentsd meg az ételt, min. Healthy Score)."
     )
     def get_planner_settings() -> dict[str, Any]:
-        return db.get_planner_settings()
+        return db.get_planner_settings(user_id=_uid())
 
     @mcp.tool(
         description=(
             "Frissíti a heti tervező preferenciákat: weekly_budget_ft (0=nincs limit), "
             "allergens (pl. ['laktóz', 'glutén']), prefer_private_label (bool), "
             "prefer_discounts_and_save_food (bool), min_healthy_score (1.0..5.0), "
-            "ai_recommendations_enabled (bool: random +N AI receptajánlás ki/be), "
-            "ai_recommendation_count (1..7 db), ai_recommendation_meals (['reggeli', 'ebed', 'vacsora'] részhalmaza)."
+            "ai_recommendations_enabled (bool), ai_recommendation_count (1..7), "
+            "ai_recommendation_meals (['reggeli', 'ebed', 'vacsora'] részhalmaza)."
         )
     )
     def update_planner_settings(
@@ -231,28 +258,28 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
                 "ai_recommendations_enabled": ai_recommendations_enabled,
                 "ai_recommendation_count": ai_recommendation_count,
                 "ai_recommendation_meals": ai_recommendation_meals,
-            }
+            },
+            user_id=_uid(),
         )
 
     @mcp.tool(description="Recept végleges törlése ID alapján.")
     def delete_recipe(recipe_id: int) -> dict[str, Any]:
-        return {"deleted": db.delete_recipe(recipe_id), "recipe_id": recipe_id}
+        return {"deleted": db.delete_recipe(recipe_id, user_id=_uid()), "recipe_id": recipe_id}
 
     @mcp.tool(
         description="Lekéri az aktuális heti menütervet (hetfo..vasarnap, reggeli/ebed/vacsora) és a függő háztartási tételeket."
     )
     def get_weekly_menu() -> dict[str, Any]:
+        uid = _uid()
         return {
-            "weekly_plan": db.get_weekly_plan(),
-            "household_items": db.list_general_items(include_ordered=False),
+            "weekly_plan": db.get_weekly_plan(user_id=uid),
+            "household_items": db.list_general_items(include_ordered=False, user_id=uid),
         }
 
     @mcp.tool(
         description=(
             "Beállít vagy töröl egy étkezést egyszerre egy vagy több napon! "
-            "days: pl. ['hetfo', 'kedd'] (választható: hetfo, kedd, szerda, csutortok, pentek, szombat, vasarnap). "
-            "meal_type: 'reggeli' | 'ebed' | 'vacsora'. "
-            "Adj meg recipe_id-t (mentett receptből) VAGY custom_title-t, vagy clear=True-t a törléshez."
+            "days: pl. ['hetfo', 'kedd']. meal_type: 'reggeli' | 'ebed' | 'vacsora'."
         )
     )
     def set_weekly_meals(
@@ -268,6 +295,7 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
             recipe_id=recipe_id,
             custom_title=custom_title,
             clear=clear,
+            user_id=_uid(),
         )
 
     @mcp.tool(
@@ -290,7 +318,9 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
                     "is_recommendation": bool(slot.get("is_recommendation", False)),
                     "custom_ingredients": slot.get("custom_ingredients") or [],
                 }
-        return db.save_weekly_plan(days=days_struct, recommendation_note=recommendation_note)
+        return db.save_weekly_plan(
+            days=days_struct, recommendation_note=recommendation_note, user_id=_uid()
+        )
 
     @mcp.tool(
         description="Egyszeri plusz élelmiszer hozzáadása az aktuális heti bevásárlólistához (pl. '+2 liter tej')."
@@ -299,14 +329,14 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
         name: str, quantity: float = 1.0, unit: str = "db", brand_hint: str = ""
     ) -> dict[str, Any]:
         return db.add_adhoc_item_to_week(
-            name=name, quantity=quantity, unit=unit, brand_hint=brand_hint
+            name=name, quantity=quantity, unit=unit, brand_hint=brand_hint, user_id=_uid()
         )
 
     @mcp.tool(
         description="Kilistázza az Általános / Háztartási (tisztítószer, papírzsepi stb.) egyszeri listát."
     )
     def list_household_items(include_ordered: bool = False) -> list[dict[str, Any]]:
-        return db.list_general_items(include_ordered=include_ordered)
+        return db.list_general_items(include_ordered=include_ordered, user_id=_uid())
 
     @mcp.tool(
         description="Új tétel felvétele az Általános / Háztartási egyszeri listára (pl. papírzsepi, Domestos) opcionális pontos márkával."
@@ -315,31 +345,29 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
         name: str, quantity: float = 1.0, unit: str = "db", brand_hint: str = ""
     ) -> dict[str, Any]:
         return db.add_general_item(
-            name=name, quantity=quantity, unit=unit, brand_hint=brand_hint
+            name=name, quantity=quantity, unit=unit, brand_hint=brand_hint, user_id=_uid()
         )
 
-    @mcp.tool(
-        description="Háztartási tétel törlése ID alapján."
-    )
+    @mcp.tool(description="Háztartási tétel törlése ID alapján.")
     def delete_household_item(item_id: int) -> dict[str, Any]:
-        return {"deleted": db.delete_general_item(item_id), "item_id": item_id}
+        return {"deleted": db.delete_general_item(item_id, user_id=_uid()), "item_id": item_id}
 
     @mcp.tool(
-        description="Amikor a Kifli rendelés kiment: végleg lezárja/törli a kosárba helyezett (IN_CART) háztartási tételeket, hogy ne loopoljanak a következő héten."
+        description="Amikor a Kifli rendelés kiment: végleg lezárja/törli a kosárba helyezett (IN_CART) háztartási tételeket."
     )
     def confirm_order_and_clear_household_items(include_pending: bool = False) -> dict[str, Any]:
         return db.finalize_order_and_clear_general_items(
-            include_pending_if_forced=include_pending
+            include_pending_if_forced=include_pending, user_id=_uid()
         )
 
     @mcp.tool(
         description="Visszaadja a teljes heti menü összevont alapanyaglistáját + a függő háztartási tételeket + a kamrában feltételezett alapanyagokat."
     )
     def get_aggregated_shopping_list() -> dict[str, Any]:
-        return db.aggregate_shopping_list()
+        return db.aggregate_shopping_list(user_id=_uid())
 
     @mcp.tool(
-        description="Kedvenc Kifli termék / márka rögzítése egy alapanyaghoz (pl. 'tej 2,8%' -> Kifli product_id + név)."
+        description="Kedvenc Kifli termék / márka rögzítése egy alapanyaghoz."
     )
     def save_preferred_kifli_product(
         ingredient_name: str, kifli_product_id: str, kifli_product_name: str
@@ -348,6 +376,7 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
             ingredient_name=ingredient_name,
             kifli_product_id=kifli_product_id,
             kifli_product_name=kifli_product_name,
+            user_id=_uid(),
         )
 
     starlette_mcp = mcp.streamable_http_app(

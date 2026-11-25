@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 from openai import AsyncOpenAI
 
+from app.auth import decrypt_secret
 from app.config import Settings
 from app.db import DAYS_HU, Database
 from app.kifli_mcp import KifliMCPManager
@@ -315,23 +316,95 @@ LOCAL_TOOLS_SPEC: list[dict[str, Any]] = [
 
 
 class ChefShoppingAgent:
-    def __init__(self, settings: Settings, db: Database, kifli: KifliMCPManager) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        db: Database,
+        kifli: KifliMCPManager,
+        secret_key: bytes = b"",
+    ) -> None:
         self.settings = settings
         self.db = db
         self.kifli = kifli
+        self.secret_key = secret_key
 
-    def _create_client(self) -> AsyncOpenAI:
-        if not self.settings.llm_api_key or "IDE_JON" in self.settings.llm_api_key:
+    def resolve_llm_config_for_user(self, user_id: int = 1) -> dict[str, Any]:
+        """
+        Visszaadja az adott felhasználó aktív AI konfigurációját (BYOK vagy szerver alapértelmezett),
+        valamint hogy van-e napi AI hívás-limit (költségvédelem).
+        """
+        user = self.db.get_user_by_id(user_id)
+        is_demo = bool(user and user.get("is_demo"))
+        user_key = ""
+        if user and user.get("llm_api_key_enc") and self.secret_key:
+            user_key = decrypt_secret(self.secret_key, user["llm_api_key_enc"])
+
+        if user and user_key:
+            provider = (user.get("llm_provider") or "gemini").strip().lower()
+            if provider == "gemini":
+                base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+                model = user.get("llm_model") or "gemini-3.1-flash-lite"
+            elif provider == "openai":
+                base_url = None
+                model = user.get("llm_model") or "gpt-4.1-mini"
+            else:
+                base_url = user.get("llm_base_url") or "http://localhost:11434/v1"
+                model = user.get("llm_model") or "qwen2.5:14b"
+            return {
+                "provider": provider,
+                "base_url": base_url,
+                "api_key": user_key,
+                "model": model,
+                "using_own_key": True,
+                "daily_limit": 0,  # saját API kulcsnál nincs limit
+                "is_demo": is_demo,
+            }
+
+        # Szerver kulcs (alapértelmezett): adminnak korlátlan, demo/vendég usernek napi limit!
+        is_admin = bool(user and user.get("is_admin")) or (user is None and user_id == 1)
+        daily_limit = 0
+        if is_demo:
+            daily_limit = self.settings.demo_daily_ai_limit
+        elif not is_admin:
+            daily_limit = self.settings.server_fallback_daily_ai_limit
+
+        return {
+            "provider": self.settings.llm_provider,
+            "base_url": self.settings.llm_base_url,
+            "api_key": self.settings.llm_api_key,
+            "model": self.settings.llm_model,
+            "using_own_key": False,
+            "daily_limit": daily_limit,
+            "is_demo": is_demo,
+        }
+
+    def check_and_consume_ai_quota(self, user_id: int = 1) -> dict[str, Any]:
+        cfg = self.resolve_llm_config_for_user(user_id)
+        limit = int(cfg["daily_limit"])
+        used = self.db.get_daily_ai_usage(user_id)
+        if limit > 0 and used >= limit:
             raise RuntimeError(
-                f"Hiányzik az API kulcs a .env fájlból (LLM_PROVIDER={self.settings.llm_provider})!"
+                f"Elérted a napi {limit} db ingyenes AI hívási limitet! "
+                "A ⚙️ Kamra fülön bármikor megadhatod a saját Gemini vagy OpenAI API kulcsodat a korlátlan használathoz."
+            )
+        if limit > 0:
+            self.db.increment_daily_ai_usage(user_id)
+        return cfg
+
+    def _create_client(self, cfg: dict[str, Any] | None = None) -> AsyncOpenAI:
+        c = cfg or self.resolve_llm_config_for_user(1)
+        api_key = c["api_key"]
+        if not api_key or "IDE_JON" in api_key:
+            raise RuntimeError(
+                f"Hiányzik az AI API kulcs ({c['provider']}). Add meg a saját kulcsodat a ⚙️ Kamra → Saját AI API Kulcs fülön!"
             )
         kwargs: dict[str, Any] = {
-            "api_key": self.settings.llm_api_key,
+            "api_key": api_key,
             "timeout": 40.0,
             "max_retries": 1,
         }
-        if self.settings.llm_base_url:
-            kwargs["base_url"] = self.settings.llm_base_url
+        if c.get("base_url"):
+            kwargs["base_url"] = c["base_url"]
         return AsyncOpenAI(**kwargs)
 
     async def _chat_completion(
@@ -340,9 +413,14 @@ class ChefShoppingAgent:
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.3,
+        llm_cfg: dict[str, Any] | None = None,
     ) -> Any:
-        candidates = [self.settings.llm_model]
-        if self.settings.llm_provider == "gemini":
+        c = llm_cfg or {
+            "provider": self.settings.llm_provider,
+            "model": self.settings.llm_model,
+        }
+        candidates = [c["model"]]
+        if c["provider"] == "gemini":
             for fallback_m in ("gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-2.5-flash-lite"):
                 if fallback_m not in candidates:
                     candidates.append(fallback_m)
@@ -364,11 +442,16 @@ class ChefShoppingAgent:
         assert last_err is not None
         raise last_err
 
-    async def _build_all_tools(self) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    async def _build_all_tools(
+        self, kifli_client: KifliMCPManager | None = None
+    ) -> tuple[list[dict[str, Any]], dict[str, str]]:
         tools = list(LOCAL_TOOLS_SPEC)
         mcp_map: dict[str, str] = {}
+        active_kifli = kifli_client
+        if active_kifli is None:
+            return tools, mcp_map
         try:
-            kifli_tools = await self.kifli.list_tools()
+            kifli_tools = await active_kifli.list_tools()
             for kt in kifli_tools:
                 tools.append(
                     {
@@ -385,9 +468,11 @@ class ChefShoppingAgent:
             log.warning("Kifli MCP tool lista nem érhető el (folytatás helyi eszközökkel): %s", exc)
         return tools, mcp_map
 
-    async def _execute_local_tool(self, name: str, args: dict[str, Any]) -> Any:
+    async def _execute_local_tool(
+        self, name: str, args: dict[str, Any], user_id: int = 1
+    ) -> Any:
         if name == "list_saved_recipes":
-            return self.db.list_recipes(category=args.get("category"))
+            return self.db.list_recipes(category=args.get("category"), user_id=user_id)
 
         if name == "save_recipe_to_db":
             return self.db.create_or_update_recipe(
@@ -398,12 +483,13 @@ class ChefShoppingAgent:
                 servings=int(args.get("servings", 2)),
                 instructions=args.get("instructions", ""),
                 healthy_score=int(args.get("healthy_score", 3) or 3),
+                user_id=user_id,
             )
 
         if name == "get_current_weekly_plan":
             return {
-                "weekly_plan": self.db.get_weekly_plan(),
-                "general_items": self.db.list_general_items(include_ordered=False),
+                "weekly_plan": self.db.get_weekly_plan(user_id=user_id),
+                "general_items": self.db.list_general_items(include_ordered=False, user_id=user_id),
             }
 
         if name == "save_full_weekly_plan":
@@ -421,6 +507,7 @@ class ChefShoppingAgent:
             return self.db.save_weekly_plan(
                 days=days_struct,
                 recommendation_note=args.get("recommendation_note", ""),
+                user_id=user_id,
             )
 
         if name == "update_meal_slot":
@@ -430,6 +517,7 @@ class ChefShoppingAgent:
                 title=args["title"],
                 recipe_id=args.get("recipe_id"),
                 custom_ingredients=args.get("custom_ingredients"),
+                user_id=user_id,
             )
 
         if name == "add_adhoc_shopping_item":
@@ -438,6 +526,7 @@ class ChefShoppingAgent:
                 quantity=float(args.get("quantity", 1)),
                 unit=args.get("unit", "db"),
                 brand_hint=args.get("brand_hint", ""),
+                user_id=user_id,
             )
 
         if name == "add_general_household_item":
@@ -446,10 +535,11 @@ class ChefShoppingAgent:
                 quantity=float(args.get("quantity", 1)),
                 unit=args.get("unit", "db"),
                 brand_hint=args.get("brand_hint", ""),
+                user_id=user_id,
             )
 
         if name == "get_aggregated_shopping_list":
-            return self.db.aggregate_shopping_list()
+            return self.db.aggregate_shopping_list(user_id=user_id)
 
         if name == "mark_general_items_placed_in_cart":
             mapped = [
@@ -460,11 +550,12 @@ class ChefShoppingAgent:
                 }
                 for item in args.get("items", [])
             ]
-            return self.db.mark_general_items_in_cart(mapped)
+            return self.db.mark_general_items_in_cart(mapped, user_id=user_id)
 
         if name == "confirm_order_and_clear_general_items":
             return self.db.finalize_order_and_clear_general_items(
-                include_pending_if_forced=bool(args.get("include_pending", False))
+                include_pending_if_forced=bool(args.get("include_pending", False)),
+                user_id=user_id,
             )
 
         if name == "remember_preferred_kifli_product":
@@ -472,23 +563,43 @@ class ChefShoppingAgent:
                 ingredient_name=args["ingredient_name"],
                 kifli_product_id=args["kifli_product_id"],
                 kifli_product_name=args["kifli_product_name"],
+                user_id=user_id,
             )
 
         raise ValueError(f"Ismeretlen helyi tool: {name}")
 
-    async def chat(self, user_message: str, source: str = "web") -> str:
-        client = self._create_client()
-        history = self.db.get_recent_chat_messages(limit=12)
-        self.db.add_chat_message("user", user_message, source=source)
+    async def chat(
+        self,
+        user_message: str,
+        source: str = "web",
+        user_id: int = 1,
+        kifli_client: KifliMCPManager | None = None,
+        is_demo: bool = False,
+    ) -> str:
+        llm_cfg = self.check_and_consume_ai_quota(user_id=user_id)
+        client = self._create_client(llm_cfg)
+        history = self.db.get_recent_chat_messages(limit=12, user_id=user_id)
+        self.db.add_chat_message("user", user_message, source=source, user_id=user_id)
 
-        kifli_status = await self.kifli.get_status()
-        status_hint = (
-            "Kifli.hu MCP kapcsolat: AKTÍV (tudsz keresni és kosarat építeni)."
-            if kifli_status["authenticated"]
-            else "Kifli.hu MCP kapcsolat: NINCS BEJELENTKEZVE (menüt és listát tudsz tervezni, de a kosárba rakáshoz kérd meg a felhasználót, hogy lépjen be a Kifli MCP fülön)."
+        active_kifli = None if is_demo else (kifli_client or self.kifli)
+        kifli_status = (
+            await active_kifli.get_status()
+            if active_kifli is not None
+            else {"authenticated": False}
         )
+        if is_demo:
+            status_hint = (
+                "INTERAKTÍV DEMO SANDBOX MÓD: Menüt, recepteket és háztartási listát teljes értékűen kezelsz, "
+                "a Kifli kosár pedig szimulált demó kosár (a felhasználó a Kosár fülön látja és optimalizálhatja)."
+            )
+        else:
+            status_hint = (
+                "Kifli.hu MCP kapcsolat: AKTÍV (tudsz keresni és kosarat építeni)."
+                if kifli_status["authenticated"]
+                else "Kifli.hu MCP kapcsolat: NINCS BEJELENTKEZVE (menüt és listát tudsz tervezni, de a kosárba rakáshoz kérd meg a felhasználót, hogy lépjen be a Kifli MCP fülön)."
+            )
 
-        ps = self.db.get_planner_settings()
+        ps = self.db.get_planner_settings(user_id=user_id)
         pref_lines = ["AKTÍV FELHASZNÁLÓI PREFERENCIÁK (KÖTELEZŐ BETARTANI!):"]
         if ps.get("weekly_budget_ft", 0) > 0:
             pref_lines.append(
@@ -547,7 +658,7 @@ class ChefShoppingAgent:
                 messages.append({"role": h["role"], "content": h["content"]})
         messages.append({"role": "user", "content": user_message})
 
-        tools, mcp_map = await self._build_all_tools()
+        tools, mcp_map = await self._build_all_tools(active_kifli)
 
         for _step in range(24):
             resp = await self._chat_completion(
@@ -555,16 +666,16 @@ class ChefShoppingAgent:
                 messages=messages,
                 tools=tools,
                 temperature=0.3,
+                llm_cfg=llm_cfg,
             )
             choice = resp.choices[0].message
             tool_calls = choice.tool_calls or []
 
             if not tool_calls:
                 reply_text = (choice.content or "").strip() or "Kész!"
-                self.db.add_chat_message("assistant", reply_text, source=source)
+                self.db.add_chat_message("assistant", reply_text, source=source, user_id=user_id)
                 return reply_text
 
-            # Gemini 3.x megköveteli az extra_content (thought_signature) visszaadását a tool_calls üzenetben!
             assistant_dump = choice.model_dump(exclude_none=True)
             assistant_dump.setdefault("content", "")
             messages.append(assistant_dump)
@@ -577,11 +688,11 @@ class ChefShoppingAgent:
                     parsed_args = {}
 
                 try:
-                    if fn_name in mcp_map:
-                        raw_out = await self.kifli.call_tool(mcp_map[fn_name], parsed_args)
+                    if fn_name in mcp_map and active_kifli is not None:
+                        raw_out = await active_kifli.call_tool(mcp_map[fn_name], parsed_args)
                         tool_output = raw_out
                     else:
-                        res = await self._execute_local_tool(fn_name, parsed_args)
+                        res = await self._execute_local_tool(fn_name, parsed_args, user_id=user_id)
                         tool_output = json.dumps(res, ensure_ascii=False)
                 except Exception as exc:
                     log.exception("Hiba a(z) %s tool futtatásakor", fn_name)
@@ -596,11 +707,16 @@ class ChefShoppingAgent:
                 )
 
         fallback = "Elértem a maximális eszközlépés-számot, kérlek ellenőrizd a kosarat vagy pontosíts!"
-        self.db.add_chat_message("assistant", fallback, source=source)
+        self.db.add_chat_message("assistant", fallback, source=source, user_id=user_id)
         return fallback
 
-    async def generate_monday_weekly_proposal(self) -> str:
-        ps = self.db.get_planner_settings()
+    async def generate_monday_weekly_proposal(
+        self,
+        user_id: int = 1,
+        kifli_client: KifliMCPManager | None = None,
+        is_demo: bool = False,
+    ) -> str:
+        ps = self.db.get_planner_settings(user_id=user_id)
         if ps.get("ai_recommendations_enabled", True):
             rec_count = int(ps.get("ai_recommendation_count", 1) or 1)
             rec_meals = ", ".join(ps.get("ai_recommendation_meals") or ["ebed"])
@@ -623,9 +739,17 @@ class ChefShoppingAgent:
             f"3) Állítsd össze a heti menüt kiegyensúlyozott `healthy_score` elosztással (heti átlag >= {ps.get('min_healthy_score', 3.4)}) {reco_instruction}, és mentsd el a `save_full_weekly_plan` eszközzel! "
             f"4) Köszönj nekünk, mutasd be áttekinthetően a heti menüt (röviden jelezve a heti átlag healthy score-t és ha valamit készlethiány miatt ki kellett hagyni), {reco_summary}sorold fel mi van az 🧻 Általános listán, és kérdezd meg: 'Mit szólsz hozzá? Módosítsunk valamin, vagy összerakhatom a Kifli kosarat?'"
         )
-        return await self.chat(prompt, source="scheduler")
+        return await self.chat(
+            prompt,
+            source="scheduler",
+            user_id=user_id,
+            kifli_client=kifli_client,
+            is_demo=is_demo,
+        )
 
-    async def optimize_cart_with_private_label(self) -> str:
+    async def optimize_cart_with_private_label(
+        self, user_id: int = 1, kifli_client: KifliMCPManager | None = None
+    ) -> str:
         prompt = (
             "Nézd át a jelenlegi élő Kifli.hu kosaramat (`kifli__get_cart`), és keress olcsóbb, "
             "jó minőségű **Kifli saját márkás** alternatívákat (Miil, Moddia, Yutto, Ubomi, Dacello, Kitchin, Pappudia) "
@@ -633,10 +757,13 @@ class ChefShoppingAgent:
             "Cseréld le a kosárban azokat a tételeket, ahol érdemi (min. 10%) megtakarítás érhető el, "
             "majd írd meg tételesen mit mire cseréltél, és pontosan hány Ft-ot spóroltunk vele!"
         )
-        return await self.chat(prompt, source="web")
+        return await self.chat(prompt, source="web", user_id=user_id, kifli_client=kifli_client)
 
-    async def parse_recipe_from_text_or_url(self, text_or_url: str) -> dict[str, Any]:
+    async def parse_recipe_from_text_or_url(
+        self, text_or_url: str, user_id: int = 1
+    ) -> dict[str, Any]:
         """URL vagy bemásolt szöveg alapján strukturált receptet nyer ki és elmenti."""
+        llm_cfg = self.check_and_consume_ai_quota(user_id=user_id)
         raw_content = text_or_url.strip()
         source_url = ""
         if raw_content.startswith(("http://", "https://")) and "\n" not in raw_content:
@@ -646,7 +773,7 @@ class ChefShoppingAgent:
                 r.raise_for_status()
                 raw_content = r.text[:25000]
 
-        client = self._create_client()
+        client = self._create_client(llm_cfg)
         extract_prompt = (
             "Nyerj ki az alábbi szövegből/HTML-ből egyetlen receptet szigorúan JSON formátumban!\n"
             "Sémanév-kulcsok:\n"
@@ -662,6 +789,7 @@ class ChefShoppingAgent:
                 {"role": "user", "content": extract_prompt},
             ],
             temperature=0.1,
+            llm_cfg=llm_cfg,
         )
         txt = (resp.choices[0].message.content or "{}").strip()
         if txt.startswith("```"):
@@ -677,4 +805,5 @@ class ChefShoppingAgent:
             instructions=parsed.get("instructions", ""),
             source_url=source_url,
             ingredients=parsed.get("ingredients", []),
+            user_id=user_id,
         )

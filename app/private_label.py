@@ -46,7 +46,7 @@ def is_kifli_private_label(name: str, brand: str = "") -> bool:
 
 
 def extract_favorite_product_ids(
-    db: Database, kifli_favorites_raw: str | None = None
+    db: Database, kifli_favorites_raw: str | None = None, user_id: int = 1
 ) -> tuple[set[int], set[str]]:
     """
     Összegyűjti a kedvenc termékeket két forrásból:
@@ -56,7 +56,7 @@ def extract_favorite_product_ids(
     fav_ids: set[int] = set()
     fav_labels: set[str] = set()
 
-    for pref in db.list_product_preferences():
+    for pref in db.list_product_preferences(user_id=user_id):
         pid_str = str(pref.get("kifli_product_id") or "").strip()
         if pid_str.isdigit():
             fav_ids.add(int(pid_str))
@@ -125,6 +125,7 @@ async def optimize_cart_private_label_structured(
     kifli: KifliMCPManager,
     agent: ChefShoppingAgent,
     parsed_cart: dict[str, Any],
+    user_id: int = 1,
 ) -> dict[str, Any]:
     """
     Valódi, kétlépcsős Kifli sajátmárka-optimalizálás:
@@ -149,7 +150,7 @@ async def optimize_cart_private_label_structured(
         )
     except Exception:
         pass
-    fav_ids, fav_labels = extract_favorite_product_ids(db, kifli_fav_raw)
+    fav_ids, fav_labels = extract_favorite_product_ids(db, kifli_fav_raw, user_id=user_id)
 
     # Csak a még NEM Kifli saját márkás tételeket vizsgáljuk
     eligible_items = [
@@ -163,8 +164,9 @@ async def optimize_cart_private_label_structured(
             "message": "A kosaradban már minden tétel Kifli saját márkás (vagy optimális)! 🎉",
         }
 
-    client = agent._create_client()
-    ps = db.get_planner_settings()
+    llm_cfg = agent.check_and_consume_ai_quota(user_id=user_id)
+    client = agent._create_client(llm_cfg)
+    ps = db.get_planner_settings(user_id=user_id)
     active_allergens = ps.get("allergens") or []
     allergen_note = ""
     if active_allergens:
@@ -206,6 +208,7 @@ async def optimize_cart_private_label_structured(
             {"role": "user", "content": kw_prompt},
         ],
         temperature=0.1,
+        llm_cfg=llm_cfg,
     )
     try:
         kw_list = _parse_json_from_llm(kw_resp.choices[0].message.content or "[]")
@@ -320,6 +323,7 @@ async def optimize_cart_private_label_structured(
             {"role": "user", "content": pick_prompt},
         ],
         temperature=0.1,
+        llm_cfg=llm_cfg,
     )
     try:
         picks = _parse_json_from_llm(pick_resp.choices[0].message.content or "[]")
