@@ -257,14 +257,18 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
 
     @mcp.tool(
         description=(
-            "Frissíti a heti tervező preferenciákat: weekly_budget_ft (0=nincs limit), "
+            "Frissíti a heti tervező preferenciákat: household_size (1..12 fő), plan_days (1..7 nap), "
+            "days_per_meal (1..4 napig ugyanaz a főtt étel), weekly_budget_ft (0=nincs limit), "
             "allergens (pl. ['laktóz', 'glutén']), prefer_private_label (bool), "
             "prefer_discounts_and_save_food (bool), min_healthy_score (1.0..5.0), "
             "ai_recommendations_enabled (bool), ai_recommendation_count (1..7), "
-            "ai_recommendation_meals (['reggeli', 'ebed', 'vacsora'] részhalmaza)."
+            "ai_recommendation_meals (['reggeli', 'ebed', 'vacsora'])."
         )
     )
     def update_planner_settings(
+        household_size: int | None = None,
+        plan_days: int | None = None,
+        days_per_meal: int | None = None,
         weekly_budget_ft: int | None = None,
         allergens: list[str] | None = None,
         prefer_private_label: bool | None = None,
@@ -276,6 +280,9 @@ def create_otthon_mcp_server(db: Database, settings: Settings) -> tuple[MCPServe
     ) -> dict[str, Any]:
         return db.update_planner_settings(
             {
+                "household_size": household_size,
+                "plan_days": plan_days,
+                "days_per_meal": days_per_meal,
                 "weekly_budget_ft": weekly_budget_ft,
                 "allergens": allergens,
                 "prefer_private_label": prefer_private_label,

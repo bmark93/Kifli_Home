@@ -624,7 +624,21 @@ class ChefShoppingAgent:
             )
 
         ps = self.db.get_planner_settings(user_id=user_id)
-        pref_lines = ["AKTÍV FELHASZNÁLÓI PREFERENCIÁK (KÖTELEZŐ BETARTANI!):"]
+        household_size = int(ps.get("household_size", 2) or 2)
+        plan_days_cnt = max(1, min(7, int(ps.get("plan_days", 7) or 7)))
+        days_per_meal = max(1, min(4, int(ps.get("days_per_meal", 2) or 2)))
+        active_day_labels = ", ".join(d[1] for d in DAYS_HU[:plan_days_cnt])
+        repeat_rule = (
+            "minden napra KÜLÖNBÖZŐ főételt tervezz (1 kaja = 1 nap)!"
+            if days_per_meal == 1
+            else f"1 főtt ételt (ebéd) **{days_per_meal} egymást követő napra** ismételj meg (pl. {days_per_meal} napos blokkokban)!"
+        )
+        pref_lines = [
+            "AKTÍV FELHASZNÁLÓI PREFERENCIÁK (KÖTELEZŐ BETARTANI!):",
+            f"- HÁZTARTÁS MÉRETE: **{household_size} főre** tervezz és számolj adagokat!",
+            f"- TERVEZETT NAPOK SZÁMA: **{plan_days_cnt} napra** tervezz ({active_day_labels}) — a többi napot hagyd üresen!",
+            f"- FŐZÉSI RITMUS (1 kaja hány napig): {repeat_rule}",
+        ]
         if ps.get("weekly_budget_ft", 0) > 0:
             pref_lines.append(
                 f"- HETI BÜDZSÉ KORLÁT: max. {ps['weekly_budget_ft']} Ft! "
@@ -756,8 +770,14 @@ class ChefShoppingAgent:
             )
             reco_summary = ""
 
+        household_size = int(ps.get("household_size", 2) or 2)
+        plan_days_cnt = max(1, min(7, int(ps.get("plan_days", 7) or 7)))
+        days_per_meal = max(1, min(4, int(ps.get("days_per_meal", 2) or 2)))
+        active_day_labels = ", ".join(d[1] for d in DAYS_HU[:plan_days_cnt])
+
         prompt = (
-            "Készíts nekünk egy friss heti menütervezetet erre a hétre (Hétfőtől Vasárnapig: reggeli, ebéd, vacsora)! "
+            f"Készíts nekünk egy friss menütervezetet **{household_size} főre**, pontosan **{plan_days_cnt} napra** ({active_day_labels}: reggeli, ebéd, vacsora), "
+            f"úgy hogy 1 főtt étel **{days_per_meal} napig** legyen! "
             "1) Nézd meg a mentett receptjeinket (`list_saved_recipes` — nézd a `healthy_score` értékeket is!) és az Általános/Háztartási listánkat (`get_current_weekly_plan`). "
             "2) Ha a Kifli MCP be van jelentkezve, KÖTELEZŐEN ellenőrizd a `kifli__batch_search_products` eszközzel a kiszemelt receptek fő/szezonális alapanyagait (pl. kelkáposzta, friss hal, speciális zöldség): ha egy fő hozzávaló NINCS készleten a Kiflin, NE ajánld fel azt az ételt erre a hétre! "
             f"3) Állítsd össze a heti menüt kiegyensúlyozott `healthy_score` elosztással (heti átlag >= {ps.get('min_healthy_score', 3.4)}) {reco_instruction}, és mentsd el a `save_full_weekly_plan` eszközzel! "

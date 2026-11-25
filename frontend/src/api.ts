@@ -215,6 +215,9 @@ export interface KifliCart {
 }
 
 export interface PlannerSettings {
+  household_size: number;
+  plan_days: number;
+  days_per_meal: number;
   weekly_budget_ft: number;
   allergens: string[];
   prefer_private_label: boolean;

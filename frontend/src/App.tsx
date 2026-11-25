@@ -269,6 +269,9 @@ export default function App() {
   const [callbackUrl, setCallbackUrl] = useState<string>("");
   const [newStaple, setNewStaple] = useState<string>("");
   const [plannerSettings, setPlannerSettings] = useState<PlannerSettings>({
+    household_size: 2,
+    plan_days: 7,
+    days_per_meal: 2,
     weekly_budget_ft: 0,
     allergens: [],
     prefer_private_label: true,
@@ -339,7 +342,8 @@ export default function App() {
         body: JSON.stringify(patch),
       });
       setPlannerSettings(saved);
-      notify("✅ Tervező preferenciák elmentve!");
+      await loadCore();
+      notify("✅ Beállítások elmentve!");
     } catch (e: any) {
       notify(e.message, "err");
     }
@@ -793,7 +797,7 @@ export default function App() {
       badge: pendingGeneralCount || undefined,
     },
     { id: "recipes", label: "Receptek", icon: UtensilsCrossed },
-    { id: "settings", label: "Kamra", icon: Settings2 },
+    { id: "settings", label: "Beállítások", icon: Settings2 },
   ];
 
   if (!authReady) {
@@ -1044,12 +1048,14 @@ export default function App() {
               <div className="rounded-3xl bg-gradient-to-br from-[#6FA014] via-[#5C870E] to-[#3F620A] dark:from-[#365314] dark:via-[#263B0F] dark:to-[#182210] border border-emerald-500/25 p-5 sm:p-6 shadow-lg text-white">
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                   <div>
-                    <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-100 dark:text-emerald-300 bg-white/15 dark:bg-emerald-500/10 border border-white/20 dark:border-emerald-500/20 px-2.5 py-1 rounded-full mb-2">
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab("settings")}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-100 dark:text-emerald-300 bg-white/15 hover:bg-white/25 dark:bg-emerald-500/10 border border-white/20 dark:border-emerald-500/20 px-2.5 py-1 rounded-full mb-2 transition"
+                    >
                       <Sparkles className="w-3.5 h-3.5" />
-                      {weekly?.plan?.week_start
-                        ? `Hét kezdete: ${weekly.plan.week_start}`
-                        : "Heti okos tervező · Kattints bármelyik étkezésre a 0-tokenes cseréhez!"}
-                    </div>
+                      {`${plannerSettings.household_size} fő · ${plannerSettings.plan_days} nap · 1 kaja ${plannerSettings.days_per_meal} napig ✎`}
+                    </button>
                     <h2 className="text-lg sm:text-2xl font-bold text-white">
                       Mit eszünk ezen a héten?
                     </h2>
@@ -1109,7 +1115,7 @@ export default function App() {
                 <div className="xl:col-span-8 2xl:col-span-9 space-y-4">
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex gap-1.5 overflow-x-auto no-scrollbar py-1">
-                      {DAYS.map((d) => {
+                      {DAYS.slice(0, plannerSettings.plan_days || 7).map((d) => {
                         const isSelected = !showAllDays && selectedDay === d.key;
                         const hasReco =
                           weekly?.plan?.days?.[d.key]?.reggeli?.is_recommendation ||
@@ -1146,11 +1152,11 @@ export default function App() {
                           : "bg-white dark:bg-[#1F261A] border-slate-200 dark:border-white/5 text-slate-600 dark:text-slate-400"
                       }`}
                     >
-                      {showAllDays ? "Napi fókusz" : "Mind a 7 nap"}
+                      {showAllDays ? "Napi fókusz" : `Mind a ${plannerSettings.plan_days || 7} nap`}
                     </button>
                   </div>
 
-                  {/* Napok rácsa: Ha mind a 7 nap látszik, PC-n 2-3 oszlopos naptár-rács! */}
+                  {/* Napok rácsa: csak a beállított napokat mutatja! */}
                   <div
                     className={
                       showAllDays
@@ -1158,7 +1164,16 @@ export default function App() {
                         : "space-y-4"
                     }
                   >
-                    {(showAllDays ? DAYS : DAYS.filter((d) => d.key === selectedDay)).map(
+                    {(showAllDays
+                      ? DAYS.slice(0, plannerSettings.plan_days || 7)
+                      : DAYS.slice(0, plannerSettings.plan_days || 7).filter(
+                          (d) => d.key === selectedDay
+                        ).length
+                      ? DAYS.slice(0, plannerSettings.plan_days || 7).filter(
+                          (d) => d.key === selectedDay
+                        )
+                      : DAYS.slice(0, 1)
+                    ).map(
                       (dayObj) => {
                         const isToday = dayObj.key === todayKey();
                         const slots = weekly?.plan?.days?.[dayObj.key] || {};
@@ -2316,15 +2331,110 @@ export default function App() {
                 )}
               </div>
 
-              {/* 4. Kártya (Teljes szélességű): 🥗 TERVEZŐ PREFERENCIÁK (Büdzsé, Allergének, Sajátmárka, Akciók) */}
-              <div className="lg:col-span-3 rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
+              {/* 1. Kártya (Legfelül, teljes szélességű): ⚙️ HETI TERVEZŐ & FŐZÉS BEÁLLÍTÁSOK */}
+              <div className="order-first lg:col-span-3 rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
                 <div>
-                  <h3 className="font-bold text-base text-slate-900 dark:text-white">
-                    🥗 Heti Tervező &amp; Kosár Preferenciák (Büdzsé · Allergének · Sajátmárka · Akciók)
-                  </h3>
+                  <h2 className="font-extrabold text-lg text-slate-900 dark:text-white">
+                    ⚙️ Menütervező &amp; Bevásárlás Beállítások
+                  </h2>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    Az AI séf heti menütervezéskor és Kifli kosárépítéskor szigorúan betartja ezeket a szabályokat.
+                    Minden beállítás egy helyen — az AI séf és az összesített bevásárlólista is azonnal ezekhez igazodik.
                   </p>
+                </div>
+
+                {/* Hány főre · Hány napra · 1 kaja hány napig */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* Hány főre */}
+                  <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
+                    <div className="flex justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
+                      <span>👥 Hány főre?</span>
+                      <span className="text-emerald-600 dark:text-emerald-400">
+                        {plannerSettings.household_size} fő
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[1, 2, 3, 4, 5, 6].map((cnt) => {
+                        const active = plannerSettings.household_size === cnt;
+                        return (
+                          <button
+                            type="button"
+                            key={cnt}
+                            onClick={() => savePlannerSettings({ household_size: cnt })}
+                            className={`w-9 h-9 rounded-xl text-xs font-bold border transition ${
+                              active
+                                ? "bg-emerald-600 text-white border-emerald-600 dark:bg-emerald-500 dark:text-slate-950 dark:border-emerald-500 shadow-sm"
+                                : "bg-white dark:bg-[#1C2218] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10"
+                            }`}
+                          >
+                            {cnt}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Hány napra */}
+                  <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
+                    <div className="flex justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
+                      <span>📅 Hány napra tervezzen?</span>
+                      <span className="text-emerald-600 dark:text-emerald-400">
+                        {plannerSettings.plan_days} nap
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[1, 2, 3, 4, 5, 6, 7].map((d) => {
+                        const active = plannerSettings.plan_days === d;
+                        return (
+                          <button
+                            type="button"
+                            key={d}
+                            onClick={() => savePlannerSettings({ plan_days: d })}
+                            className={`w-9 h-9 rounded-xl text-xs font-bold border transition ${
+                              active
+                                ? "bg-emerald-600 text-white border-emerald-600 dark:bg-emerald-500 dark:text-slate-950 dark:border-emerald-500 shadow-sm"
+                                : "bg-white dark:bg-[#1C2218] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10"
+                            }`}
+                          >
+                            {d}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* 1 kaja hány napig */}
+                  <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
+                    <div className="flex justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
+                      <span>🍲 1 kaja hány napig legyen?</span>
+                      <span className="text-emerald-600 dark:text-emerald-400">
+                        {plannerSettings.days_per_meal} nap
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[
+                        { v: 1, l: "1 nap (mindennap új)" },
+                        { v: 2, l: "2 nap" },
+                        { v: 3, l: "3 nap" },
+                        { v: 4, l: "4 nap" },
+                      ].map((opt) => {
+                        const active = plannerSettings.days_per_meal === opt.v;
+                        return (
+                          <button
+                            type="button"
+                            key={opt.v}
+                            onClick={() => savePlannerSettings({ days_per_meal: opt.v })}
+                            className={`px-3 h-9 rounded-xl text-xs font-bold border transition ${
+                              active
+                                ? "bg-emerald-600 text-white border-emerald-600 dark:bg-emerald-500 dark:text-slate-950 dark:border-emerald-500 shadow-sm"
+                                : "bg-white dark:bg-[#1C2218] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10"
+                            }`}
+                          >
+                            {opt.l}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">

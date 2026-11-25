@@ -138,6 +138,9 @@ class ManualSlotSwapInput(BaseModel):
 
 
 class PlannerSettingsInput(BaseModel):
+    household_size: int | None = None
+    plan_days: int | None = None
+    days_per_meal: int | None = None
     weekly_budget_ft: int | None = None
     allergens: list[str] | None = None
     prefer_private_label: bool | None = None

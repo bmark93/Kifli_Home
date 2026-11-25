@@ -118,6 +118,9 @@ def detect_diet_requirements(ingredient_name: str, active_allergens: list[str]) 
 
 class Database:
     DEFAULT_PLANNER_SETTINGS: dict[str, Any] = {
+        "household_size": 2,
+        "plan_days": 7,
+        "days_per_meal": 2,
         "weekly_budget_ft": 0,
         "allergens": [],
         "prefer_private_label": True,
@@ -1469,27 +1472,37 @@ class Database:
                     merged[bucket_key]["used_in"].append(origin)
 
         if plan:
-            last_batch_cooked: dict[str, tuple[str, int]] = {}
-            for day_idx, (day_code, day_label) in enumerate(DAYS_HU):
+            household_size = max(1, int(planner_prefs.get("household_size", 2) or 2))
+            plan_days_count = max(1, min(7, int(planner_prefs.get("plan_days", 7) or 7)))
+            days_per_meal = max(1, min(4, int(planner_prefs.get("days_per_meal", 2) or 2)))
+            active_days = DAYS_HU[:plan_days_count]
+
+            # Batch-cooking követés: (title_key, start_day_idx, remaining_covered_days)
+            batch_state: dict[str, tuple[str, int, int]] = {}
+            for day_idx, (day_code, day_label) in enumerate(active_days):
                 day_slots = plan["days"].get(day_code, {})
                 for meal_code in MEAL_TYPES:
                     slot = day_slots.get(meal_code)
                     if not slot:
-                        last_batch_cooked.pop(meal_code, None)
+                        batch_state.pop(meal_code, None)
                         continue
                     rid = slot.get("recipe_id")
                     title_key = str(rid) if rid else normalize_key(slot.get("title", ""))
                     rec_obj = recipes_by_id.get(rid) if rid else None
-                    servings = int(rec_obj["servings"]) if rec_obj else 2
+                    servings = max(1, int(rec_obj["servings"])) if rec_obj else household_size
 
-                    if meal_code in ("ebed", "vacsora") and servings >= 4:
-                        prev = last_batch_cooked.get(meal_code)
-                        if prev and prev[0] == title_key and prev[1] == day_idx - 1:
-                            last_batch_cooked.pop(meal_code, None)
+                    # Ha a recept adagszáma legalább 2x a háztartás mérete és days_per_meal > 1
+                    covered_days = min(days_per_meal, max(1, servings // household_size))
+                    if meal_code in ("ebed", "vacsora") and days_per_meal > 1 and covered_days > 1:
+                        prev = batch_state.get(meal_code)
+                        if prev and prev[0] == title_key and prev[1] == day_idx - 1 and prev[2] > 0:
+                            batch_state[meal_code] = (title_key, day_idx, prev[2] - 1)
                             continue
-                        last_batch_cooked[meal_code] = (title_key, day_idx)
+                        batch_state[meal_code] = (title_key, day_idx, covered_days - 1)
+                        qty_scale = 1.0
                     else:
-                        last_batch_cooked.pop(meal_code, None)
+                        batch_state.pop(meal_code, None)
+                        qty_scale = round(household_size / servings, 2) if rec_obj else 1.0
 
                     origin_label = f"{day_label} {meal_code}: {slot.get('title', '')}"
                     custom_ings = slot.get("custom_ingredients") or []
@@ -1497,7 +1510,7 @@ class Database:
                         for ing in rec_obj["ingredients"]:
                             _accumulate(
                                 ing["name"],
-                                ing["quantity"],
+                                round(float(ing["quantity"]) * qty_scale, 2),
                                 ing["unit"],
                                 bool(ing["is_staple"]),
                                 ing.get("brand_hint", ""),
@@ -1612,6 +1625,12 @@ class Database:
                     continue
                 if k == "weekly_budget_ft":
                     v = max(0, int(v))
+                elif k == "household_size":
+                    v = max(1, min(12, int(v)))
+                elif k == "plan_days":
+                    v = max(1, min(7, int(v)))
+                elif k == "days_per_meal":
+                    v = max(1, min(4, int(v)))
                 elif k == "min_healthy_score":
                     v = max(1.0, min(5.0, round(float(v), 1)))
                 elif k == "ai_recommendation_count":
