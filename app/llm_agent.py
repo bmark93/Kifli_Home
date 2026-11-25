@@ -70,6 +70,26 @@ LOCAL_TOOLS_SPEC: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "list_community_public_recipes",
+            "description": "Kilistázza a más felhasználók által nyilvánossá tett közösségi recepteket (csak akkor használd, ha a felhasználó engedélyezte a közösségi receptforrást).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "Opcionális szűrő: reggeli, ebed, vagy vacsora",
+                    },
+                    "search": {
+                        "type": "string",
+                        "description": "Opcionális keresőszó",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "save_recipe_to_db",
             "description": "Új recept mentése VAGY meglévő recept frissítése (ha megadod a recipe_id-t) a saját receptgyűjteményben strukturált hozzávalókkal.",
             "parameters": {
@@ -478,6 +498,14 @@ class ChefShoppingAgent:
         if name == "list_saved_recipes":
             return self.db.list_recipes(category=args.get("category"), user_id=user_id)
 
+        if name == "list_community_public_recipes":
+            return self.db.list_community_recipes(
+                category=args.get("category"),
+                search=args.get("search") or "",
+                viewer_user_id=user_id,
+                limit=40,
+            )
+
         if name == "save_recipe_to_db":
             return self.db.create_or_update_recipe(
                 recipe_id=args.get("recipe_id"),
@@ -684,8 +712,21 @@ class ChefShoppingAgent:
             )
         else:
             pref_lines.append(
-                "- AI ÚJ RECEPTAJÁNLÁS: KIKAPCSOLVA! NE találj ki új/random receptet, KIZÁRÓLAG a felhasználó saját mentett receptjeiből állítsd össze a teljes heti menüt (`is_recommendation: false` mindenhol)!"
+                "- AI ÚJ RECEPTAJÁNLÁS: KIKAPCSOLVA! NE találj ki új/random receptet, KIZÁRÓLAG az engedélyezett receptforrásokból állítsd össze a teljes heti menüt (`is_recommendation: false` mindenhol)!"
             )
+
+        recipe_sources = ps.get("recipe_sources") or ["own"]
+        source_parts: list[str] = []
+        if "own" in recipe_sources:
+            source_parts.append("SAJÁT mentett receptek (`list_saved_recipes`)")
+        if "community" in recipe_sources:
+            source_parts.append("KÖZÖSSÉGI nyilvános receptek (`list_community_public_recipes`)")
+        if "kifli" in recipe_sources:
+            source_parts.append("KIFLI.HU receptek (`kifli__search_recipes_by_vector_similarity` / `kifli__get_recipe_detail`)")
+        pref_lines.append(
+            f"- ENGEDÉLYEZETT RECEPTFORRÁSOK MENÜTERVEZÉSHEZ: **{', '.join(source_parts)}**. "
+            "Kizárólag a felsorolt forrásokból válogass!"
+        )
         prefs_block = "\n".join(pref_lines)
 
         messages: list[dict[str, Any]] = [
@@ -774,11 +815,20 @@ class ChefShoppingAgent:
         plan_days_cnt = max(1, min(7, int(ps.get("plan_days", 7) or 7)))
         days_per_meal = max(1, min(4, int(ps.get("days_per_meal", 2) or 2)))
         active_day_labels = ", ".join(d[1] for d in DAYS_HU[:plan_days_cnt])
+        recipe_sources = ps.get("recipe_sources") or ["own"]
+        src_steps: list[str] = []
+        if "own" in recipe_sources:
+            src_steps.append("a saját mentett receptjeinket (`list_saved_recipes`)")
+        if "community" in recipe_sources:
+            src_steps.append("a közösségi nyilvános recepteket (`list_community_public_recipes`)")
+        if "kifli" in recipe_sources:
+            src_steps.append("a Kifli.hu recepteket (`kifli__search_recipes_by_vector_similarity`)")
+        src_text = ", ".join(src_steps) or "a saját mentett receptjeinket (`list_saved_recipes`)"
 
         prompt = (
             f"Készíts nekünk egy friss menütervezetet **{household_size} főre**, pontosan **{plan_days_cnt} napra** ({active_day_labels}: reggeli, ebéd, vacsora), "
             f"úgy hogy 1 főtt étel **{days_per_meal} napig** legyen! "
-            "1) Nézd meg a mentett receptjeinket (`list_saved_recipes` — nézd a `healthy_score` értékeket is!) és az Általános/Háztartási listánkat (`get_current_weekly_plan`). "
+            f"1) Nézd meg az engedélyezett receptforrásokat: {src_text} (figyelve a `healthy_score` értékekre!) és az Általános/Háztartási listánkat (`get_current_weekly_plan`). "
             "2) Ha a Kifli MCP be van jelentkezve, KÖTELEZŐEN ellenőrizd a `kifli__batch_search_products` eszközzel a kiszemelt receptek fő/szezonális alapanyagait (pl. kelkáposzta, friss hal, speciális zöldség): ha egy fő hozzávaló NINCS készleten a Kiflin, NE ajánld fel azt az ételt erre a hétre! "
             f"3) Állítsd össze a heti menüt kiegyensúlyozott `healthy_score` elosztással (heti átlag >= {ps.get('min_healthy_score', 3.4)}) {reco_instruction}, és mentsd el a `save_full_weekly_plan` eszközzel! "
             f"4) Köszönj nekünk, mutasd be áttekinthetően a heti menüt (röviden jelezve a heti átlag healthy score-t és ha valamit készlethiány miatt ki kellett hagyni), {reco_summary}sorold fel mi van az 🧻 Általános listán, és kérdezd meg: 'Mit szólsz hozzá? Módosítsunk valamin, vagy összerakhatom a Kifli kosarat?'"

@@ -129,6 +129,7 @@ class Database:
         "ai_recommendations_enabled": True,
         "ai_recommendation_count": 1,
         "ai_recommendation_meals": ["ebed"],
+        "recipe_sources": ["own"],
     }
 
     def __init__(self, db_path: Path) -> None:
@@ -1921,6 +1922,14 @@ class Database:
                         if strip_accents(str(m).strip().lower()) in MEAL_TYPES
                     ]
                     v = cleaned or ["ebed"]
+                elif k == "recipe_sources":
+                    valid_sources = ("own", "community", "kifli")
+                    cleaned = [
+                        str(s).strip().lower()
+                        for s in v
+                        if str(s).strip().lower() in valid_sources
+                    ]
+                    v = list(dict.fromkeys(cleaned)) or ["own"]
                 current[k] = v
                 conn.execute(
                     """

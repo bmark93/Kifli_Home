@@ -299,6 +299,7 @@ export default function App() {
     ai_recommendations_enabled: true,
     ai_recommendation_count: 1,
     ai_recommendation_meals: ["ebed"],
+    recipe_sources: ["own"],
   });
   const [smartRestock, setSmartRestock] = useState<SmartRestockResponse | null>(null);
   const [household, setHousehold] = useState<HouseholdInfo | null>(null);
@@ -3304,6 +3305,50 @@ export default function App() {
                         );
                       })}
                     </div>
+                  </div>
+                </div>
+
+                {/* 📚 AI Menütervező receptforrásai (Saját / Közösségi / Kifli.hu) */}
+                <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-4 space-y-2.5">
+                  <div>
+                    <div className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white">
+                      📚 Melyik receptforrásokból tervezzen az AI heti menüt?
+                    </div>
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                      Válaszd ki, hogy az AI új heti menü generáláskor csak a saját receptjeidből, vagy a közösségi nyilvános és a Kifli.hu receptekből is válogasson-e. (Ha egy közösségi vagy Kifli.hu recept megtetszik a Recept válogatásban, ott 1 gombbal a sajátjaid közé is elmentheted!)
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {(
+                      [
+                        { key: "own", label: "🔒 Saját receptjeim" },
+                        { key: "community", label: "🌍 Közösségi nyilvános receptek" },
+                        { key: "kifli", label: "🥑 Kifli.hu receptek" },
+                      ] as const
+                    ).map((src) => {
+                      const currentSources = plannerSettings.recipe_sources || ["own"];
+                      const active = currentSources.includes(src.key);
+                      return (
+                        <button
+                          type="button"
+                          key={src.key}
+                          onClick={() => {
+                            const next = active
+                              ? currentSources.filter((x) => x !== src.key)
+                              : [...currentSources, src.key];
+                            if (next.length === 0) return;
+                            savePlannerSettings({ recipe_sources: next });
+                          }}
+                          className={`px-3.5 py-2 rounded-xl text-xs font-bold border transition ${
+                            active
+                              ? "bg-[#6FA014] text-white border-[#6FA014] shadow-sm"
+                              : "bg-white dark:bg-[#1C2218] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10 hover:border-[#6FA014]/50"
+                          }`}
+                        >
+                          {src.label}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 

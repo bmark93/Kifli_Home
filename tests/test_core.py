@@ -439,6 +439,7 @@ def test_couple_tinder_match_planner_settings_and_smart_restock(tmp_path: Path) 
                 "ai_recommendations_enabled": False,
                 "ai_recommendation_count": 3,
                 "ai_recommendation_meals": ["reggeli", "vacsora"],
+                "recipe_sources": ["own", "community", "kifli"],
             },
         )
         assert upd.status_code == 200
@@ -452,6 +453,7 @@ def test_couple_tinder_match_planner_settings_and_smart_restock(tmp_path: Path) 
         assert ps["ai_recommendations_enabled"] is False
         assert ps["ai_recommendation_count"] == 3
         assert ps["ai_recommendation_meals"] == ["reggeli", "vacsora"]
+        assert ps["recipe_sources"] == ["own", "community", "kifli"]
 
         # 2. Páros Kaja Tinder Match szoba (p1 + p2 -> IT'S A MATCH!)
         recipes = client.get("/api/recipes?category=ebed").json()

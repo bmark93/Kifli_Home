@@ -169,6 +169,7 @@ class PlannerSettingsInput(BaseModel):
     ai_recommendations_enabled: bool | None = None
     ai_recommendation_count: int | None = None
     ai_recommendation_meals: list[str] | None = None
+    recipe_sources: list[str] | None = None
 
 
 class TinderSessionCreateInput(BaseModel):

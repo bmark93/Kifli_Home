@@ -255,6 +255,7 @@ export interface PlannerSettings {
   ai_recommendations_enabled: boolean;
   ai_recommendation_count: number;
   ai_recommendation_meals: string[];
+  recipe_sources?: ("own" | "community" | "kifli")[];
 }
 
 export interface SmartRestockItem {
