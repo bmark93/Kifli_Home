@@ -576,6 +576,22 @@ class ChefShoppingAgent:
         kifli_client: KifliMCPManager | None = None,
         is_demo: bool = False,
     ) -> str:
+        llm_cfg = self.resolve_llm_config_for_user(user_id=user_id)
+        if is_demo and not llm_cfg["using_own_key"]:
+            self.db.add_chat_message("user", user_message, source=source, user_id=user_id)
+            demo_reply = (
+                "👋 **Demo módban az AI séf csak előnézetben fut (0 API költséggel).**\n\n"
+                "Ha saját fiókkal belépsz (Google-fiókkal vagy e-maillel) és a **⚙️ Kamra → Saját AI API Kulcs** "
+                "résznél megadod a saját Gemini vagy OpenAI kulcsodat (~30–150 Ft/hó), akkor itt élőben "
+                "tudsz velem beszélgetni, heti menüt generálni és 1 kattintással összeállítani a valódi Kifli.hu kosaradat!\n\n"
+                "**Addig is próbáld ki bátran az élő, 0 AI-tokenes funkciókat itt a Demóban:**\n"
+                "• **🛒 Kosár fül → 🏷️ Spórolás Kifli saját márkákkal** (azonnali csere + kedvenc márkák összehasonlító popup!)\n"
+                "• **📅 Menü fül → 🔥 Kaja Tinder & Páros Match** + kattintásos receptcsere\n"
+                "• **🧻 Háztartás fül → 🧠 Smart Restock** fogyás-előrejelző"
+            )
+            self.db.add_chat_message("assistant", demo_reply, source=source, user_id=user_id)
+            return demo_reply
+
         llm_cfg = self.check_and_consume_ai_quota(user_id=user_id)
         client = self._create_client(llm_cfg)
         history = self.db.get_recent_chat_messages(limit=12, user_id=user_id)
@@ -763,6 +779,12 @@ class ChefShoppingAgent:
         self, text_or_url: str, user_id: int = 1
     ) -> dict[str, Any]:
         """URL vagy bemásolt szöveg alapján strukturált receptet nyer ki és elmenti."""
+        user = self.db.get_user_by_id(user_id)
+        llm_cfg = self.resolve_llm_config_for_user(user_id=user_id)
+        if user and user.get("is_demo") and not llm_cfg["using_own_key"]:
+            raise RuntimeError(
+                "Demo módban az AI recept-import ki van kapcsolva. Saját fiókban (saját Gemini/OpenAI API kulccsal vagy Claude MCP-vel) teljes értékűen működik!"
+            )
         llm_cfg = self.check_and_consume_ai_quota(user_id=user_id)
         raw_content = text_or_url.strip()
         source_url = ""

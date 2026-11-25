@@ -653,6 +653,11 @@ def test_multi_user_auth_isolation_byok_and_demo_sandbox(tmp_path: Path) -> None
         assert len(opt["auto_swapped"]) >= 2
         assert len(opt["favorite_proposals"]) >= 1  # Zewa Deluxe és Magyar Tej kedvenc!
 
+        # Demo chat 0 AI költséggel statikus magyar tájékoztatót ad vissza
+        demo_chat = client.post("/api/chat", json={"message": "Szia, mit főzzek?"})
+        assert demo_chat.status_code == 200
+        assert "Demo módban az AI séf" in demo_chat.json()["reply"]
+
         # Napi AI limit (demo_daily_ai_limit=3) tényleg leállítja a 4. hívást
         demo_uid = d.json()["id"]
         for _ in range(3):

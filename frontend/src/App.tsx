@@ -983,12 +983,9 @@ export default function App() {
           {currentUser?.is_demo && (
             <div className="mb-4 rounded-2xl bg-amber-50 dark:bg-amber-950/50 border border-amber-400/40 px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-900 dark:text-amber-100">
               <span>
-                🎯 <strong>Interaktív Demo Mód:</strong> szabadon próbálgathatod a Kaja Tindert, a
-                szimulált Kifli kosarat és a Sajátmárka-optimalizálót! (Napi AI keret:{" "}
-                <strong>
-                  {status?.ai_daily_used || 0}/{status?.ai_daily_limit || 8}
-                </strong>
-                )
+                🎯 <strong>Interaktív Demo Mód:</strong> szabadon próbálgathatod a szimulált Kifli
+                kosarat, a Sajátmárka-optimalizálót, a Kaja Tindert és a Smart Restockot! (Az élő AI
+                chathez lépj be saját fiókkal és adj meg saját API kulcsot.)
               </span>
               <button
                 type="button"

@@ -309,6 +309,10 @@ export function LoginView({ config, theme, onToggleTheme, onAuthenticated }: Pro
           </form>
         </div>
       </div>
+
+      <p className="mt-6 text-center text-[11px] text-slate-400 dark:text-slate-500 max-w-md">
+        Független, nem hivatalos közösségi hobbiprojekt a Kifli.hu nyilvános MCP felületére építve.
+      </p>
     </div>
   );
 }
