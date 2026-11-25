@@ -248,6 +248,7 @@ export interface PlannerSettings {
   plan_days: number;
   days_per_meal: number;
   weekly_budget_ft: number;
+  daily_calorie_target?: number;
   allergens: string[];
   prefer_private_label: boolean;
   prefer_discounts_and_save_food: boolean;

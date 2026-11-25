@@ -432,6 +432,7 @@ def test_couple_tinder_match_planner_settings_and_smart_restock(tmp_path: Path) 
                 "plan_days": 5,
                 "days_per_meal": 3,
                 "weekly_budget_ft": 42000,
+                "daily_calorie_target": 2000,
                 "allergens": ["laktóz", "glutén"],
                 "prefer_private_label": True,
                 "prefer_discounts_and_save_food": True,
@@ -448,6 +449,7 @@ def test_couple_tinder_match_planner_settings_and_smart_restock(tmp_path: Path) 
         assert ps["plan_days"] == 5
         assert ps["days_per_meal"] == 3
         assert ps["weekly_budget_ft"] == 42000
+        assert ps["daily_calorie_target"] == 2000
         assert ps["allergens"] == ["laktóz", "glutén"]
         assert ps["min_healthy_score"] == 4.0
         assert ps["ai_recommendations_enabled"] is False

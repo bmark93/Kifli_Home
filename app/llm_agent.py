@@ -674,6 +674,15 @@ class ChefShoppingAgent:
                 "kosárépítésnél pedig válaszd a kedvezőbb árú/akciós kiszereléseket, hogy beférjünk a keretbe! "
                 "Ha a végösszeg mégis túllépi, röviden emeld ki a 2-3 legdrágább tételt."
             )
+        daily_cal = int(ps.get("daily_calorie_target", 0) or 0)
+        if daily_cal > 0:
+            cal_min = round(daily_cal * 0.90)
+            cal_max = round(daily_cal * 1.10)
+            pref_lines.append(
+                f"- NAPI KALÓRIACÉL: **{daily_cal} kcal / fő / nap** (MAX ±10% eltérés, azaz **{cal_min}–{cal_max} kcal/nap**)! "
+                "A receptek `kcal_per_serving` értékeit add össze naponta (reggeli + ebéd + vacsora), "
+                "és úgy párosítsd az ételeket minden egyes napra, hogy a napi összkalória 1 főre számolva szigorúan ebben a ±10%-os tartományban maradjon!"
+            )
         if ps.get("allergens"):
             allerg_set = {a.lower() for a in ps["allergens"]}
             diet_rules: list[str] = []
@@ -825,9 +834,17 @@ class ChefShoppingAgent:
             src_steps.append("a Kifli.hu recepteket (`kifli__search_recipes_by_vector_similarity`)")
         src_text = ", ".join(src_steps) or "a saját mentett receptjeinket (`list_saved_recipes`)"
 
+        daily_cal = int(ps.get("daily_calorie_target", 0) or 0)
+        cal_rule = ""
+        if daily_cal > 0:
+            cal_rule = (
+                f" Minden egyes nap (reggeli + ebéd + vacsora) 1 főre számolt összkalóriája "
+                f"legyen **{daily_cal} kcal ±10%** (azaz **{round(daily_cal * 0.90)}–{round(daily_cal * 1.10)} kcal/nap**) között!"
+            )
+
         prompt = (
             f"Készíts nekünk egy friss menütervezetet **{household_size} főre**, pontosan **{plan_days_cnt} napra** ({active_day_labels}: reggeli, ebéd, vacsora), "
-            f"úgy hogy 1 főtt étel **{days_per_meal} napig** legyen! "
+            f"úgy hogy 1 főtt étel **{days_per_meal} napig** legyen!{cal_rule} "
             f"1) Nézd meg az engedélyezett receptforrásokat: {src_text} (figyelve a `healthy_score` értékekre!) és az Általános/Háztartási listánkat (`get_current_weekly_plan`). "
             "2) Ha a Kifli MCP be van jelentkezve, KÖTELEZŐEN ellenőrizd a `kifli__batch_search_products` eszközzel a kiszemelt receptek fő/szezonális alapanyagait (pl. kelkáposzta, friss hal, speciális zöldség): ha egy fő hozzávaló NINCS készleten a Kiflin, NE ajánld fel azt az ételt erre a hétre! "
             f"3) Állítsd össze a heti menüt kiegyensúlyozott `healthy_score` elosztással (heti átlag >= {ps.get('min_healthy_score', 3.4)}) {reco_instruction}, és mentsd el a `save_full_weekly_plan` eszközzel! "

@@ -122,6 +122,7 @@ class Database:
         "plan_days": 7,
         "days_per_meal": 2,
         "weekly_budget_ft": 0,
+        "daily_calorie_target": 0,
         "allergens": [],
         "prefer_private_label": True,
         "prefer_discounts_and_save_food": True,
@@ -1897,6 +1898,9 @@ class Database:
                     continue
                 if k == "weekly_budget_ft":
                     v = max(0, int(v))
+                elif k == "daily_calorie_target":
+                    raw_cal = int(v)
+                    v = 0 if raw_cal <= 0 else max(800, min(6000, raw_cal))
                 elif k == "household_size":
                     v = max(1, min(12, int(v)))
                 elif k == "plan_days":

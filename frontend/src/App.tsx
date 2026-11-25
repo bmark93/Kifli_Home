@@ -292,6 +292,7 @@ export default function App() {
     plan_days: 7,
     days_per_meal: 2,
     weekly_budget_ft: 0,
+    daily_calorie_target: 0,
     allergens: [],
     prefer_private_label: true,
     prefer_discounts_and_save_food: true,
@@ -1366,12 +1367,35 @@ export default function App() {
                                   </span>
                                 )}
                               </div>
-                              {dayMacros.kcal > 0 ? (
-                                <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-800 dark:text-amber-300 border border-amber-500/20">
-                                  🔥 {dayMacros.kcal} kcal · P {Math.round(dayMacros.p)}g · CH{" "}
-                                  {Math.round(dayMacros.c)}g · Zs {Math.round(dayMacros.f)}g
-                                </span>
-                              ) : (
+                              {dayMacros.kcal > 0 ? (() => {
+                                const calTarget = plannerSettings.daily_calorie_target || 0;
+                                const calMin = Math.round(calTarget * 0.9);
+                                const calMax = Math.round(calTarget * 1.1);
+                                const inRange =
+                                  calTarget > 0 && dayMacros.kcal >= calMin && dayMacros.kcal <= calMax;
+                                const outRange =
+                                  calTarget > 0 && (dayMacros.kcal < calMin || dayMacros.kcal > calMax);
+                                return (
+                                  <span
+                                    className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border ${
+                                      inRange
+                                        ? "bg-emerald-500/15 text-emerald-800 dark:text-emerald-300 border-emerald-500/30"
+                                        : outRange
+                                        ? "bg-rose-500/10 text-rose-700 dark:text-rose-300 border-rose-500/25"
+                                        : "bg-amber-500/10 text-amber-800 dark:text-amber-300 border-amber-500/20"
+                                    }`}
+                                    title={
+                                      calTarget > 0
+                                        ? `Napi kalóriacél: ${calTarget} kcal (±10%: ${calMin}–${calMax} kcal)`
+                                        : undefined
+                                    }
+                                  >
+                                    🔥 {dayMacros.kcal} kcal
+                                    {calTarget > 0 ? ` / ${calTarget}` : ""} · P {Math.round(dayMacros.p)}g · CH{" "}
+                                    {Math.round(dayMacros.c)}g · Zs {Math.round(dayMacros.f)}g
+                                  </span>
+                                );
+                              })() : (
                                 <span className="text-[11px] text-slate-400 dark:text-slate-500">
                                   Kattints a cseréhez
                                 </span>
@@ -3187,6 +3211,68 @@ export default function App() {
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                  {/* Napi kalóriacél (±10%) */}
+                  <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                        🔥 Napi kalóriacél (kcal/fő, ±10%)
+                      </label>
+                      {(plannerSettings.daily_calorie_target || 0) > 0 && (
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
+                          {Math.round((plannerSettings.daily_calorie_target || 0) * 0.9)}–
+                          {Math.round((plannerSettings.daily_calorie_target || 0) * 1.1)} kcal
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        type="number"
+                        step={50}
+                        min={0}
+                        max={6000}
+                        placeholder="0 = nincs cél"
+                        value={plannerSettings.daily_calorie_target || 0}
+                        onChange={(e) =>
+                          setPlannerSettings((p) => ({
+                            ...p,
+                            daily_calorie_target: Math.max(0, parseInt(e.target.value || "0", 10)),
+                          }))
+                        }
+                        className="flex-1 bg-white dark:bg-[#1C2218] text-slate-900 dark:text-white rounded-xl px-3 py-2 text-sm border border-slate-200 dark:border-white/10"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          savePlannerSettings({
+                            daily_calorie_target: plannerSettings.daily_calorie_target || 0,
+                          })
+                        }
+                        className="px-3 py-2 rounded-xl bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950 font-bold text-xs"
+                      >
+                        Ment
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-1">
+                      {[0, 1600, 1800, 2000, 2200, 2500].map((preset) => {
+                        const active = (plannerSettings.daily_calorie_target || 0) === preset;
+                        return (
+                          <button
+                            type="button"
+                            key={preset}
+                            onClick={() => savePlannerSettings({ daily_calorie_target: preset })}
+                            className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition ${
+                              active
+                                ? "bg-emerald-600 text-white border-emerald-600 dark:bg-emerald-500 dark:text-slate-950"
+                                : "bg-white dark:bg-[#1C2218] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10"
+                            }`}
+                          >
+                            {preset === 0 ? "Nincs" : `${preset}`}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
                   {/* Heti büdzsé */}
                   <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
                     <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
