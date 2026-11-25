@@ -41,7 +41,9 @@ import {
   type GeneralItem,
   type Ingredient,
   type KifliCart,
+  type OptimizePrivateLabelResponse,
   type PlannerSettings,
+  type PrivateLabelSwapProposal,
   type Recipe,
   type SmartRestockResponse,
   type StatusInfo,
@@ -49,6 +51,7 @@ import {
 } from "./api";
 import { MealSwapSheet } from "./MealSwapSheet";
 import { FoodTinderSheet } from "./FoodTinderSheet";
+import { PrivateLabelSwapModal } from "./PrivateLabelSwapModal";
 
 type TabId = "menu" | "chat" | "cart" | "general" | "recipes" | "settings";
 
@@ -239,6 +242,12 @@ export default function App() {
     min_healthy_score: 3.4,
   });
   const [smartRestock, setSmartRestock] = useState<SmartRestockResponse | null>(null);
+  const [favoriteSwapModal, setFavoriteSwapModal] = useState<{
+    autoSwappedCount: number;
+    autoSavingsFt: number;
+    proposals: PrivateLabelSwapProposal[];
+  } | null>(null);
+  const [lastSwapSummary, setLastSwapSummary] = useState<string>("");
 
   function notify(msg: string, kind: "ok" | "err" = "ok") {
     setToast({ msg, kind });
@@ -313,15 +322,55 @@ export default function App() {
 
   async function handleOptimizePrivateLabel() {
     setBusyAction("optimize-pl");
+    setLastSwapSummary("");
     try {
-      const res = await apiFetch<{ reply: string; cart: KifliCart }>(
+      const res = await apiFetch<OptimizePrivateLabelResponse>(
         "/api/kifli/cart/optimize-private-label",
         { method: "POST" }
       );
       setCart(res.cart);
-      await loadCore();
-      setActiveTab("chat");
-      notify("🏷️ Kifli sajátmárka-optimalizálás kész! Nézd meg a megtakarítást a chatben.");
+      if (res.favorite_proposals && res.favorite_proposals.length > 0) {
+        setFavoriteSwapModal({
+          autoSwappedCount: res.auto_swapped.length,
+          autoSavingsFt: res.auto_savings_ft,
+          proposals: res.favorite_proposals,
+        });
+      }
+      if (res.auto_swapped.length > 0) {
+        const names = res.auto_swapped
+          .map((s) => `${s.old_name} → ${s.new_name} (-${formatFt(s.savings_ft)})`)
+          .join(" · ");
+        setLastSwapSummary(
+          `✅ ${res.auto_swapped.length} termék azonnal Kifli saját márkára cserélve (-${formatFt(res.auto_savings_ft)}): ${names}`
+        );
+      }
+      notify(res.message);
+    } catch (e: any) {
+      notify(e.message, "err");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleApplyFavoriteSwaps(swaps: PrivateLabelSwapProposal[]) {
+    setBusyAction("apply-fav-swaps");
+    try {
+      const res = await apiFetch<{ applied_count: number; cart: KifliCart }>(
+        "/api/kifli/cart/apply-swaps",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            swaps: swaps.map((s) => ({
+              old_product_id: s.old_product_id,
+              new_product_id: s.new_product_id,
+              new_quantity: s.new_quantity,
+            })),
+          }),
+        }
+      );
+      setCart(res.cart);
+      const totalSaved = swaps.reduce((acc, s) => acc + s.savings_ft, 0);
+      notify(`✅ ${res.applied_count} kedvelt termék lecserélve Kifli saját márkára (-${formatFt(totalSaved)})!`);
     } catch (e: any) {
       notify(e.message, "err");
     } finally {
@@ -1229,7 +1278,20 @@ export default function App() {
           {activeTab === "cart" && (
             <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
               {/* Termékek rácsa (bal 8-9 oszlop PC-n, mobil alul) */}
-              <div className="xl:col-span-8 2xl:col-span-9 order-2 xl:order-1">
+              <div className="xl:col-span-8 2xl:col-span-9 order-2 xl:order-1 space-y-3">
+                {lastSwapSummary && (
+                  <div className="rounded-2xl bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-500/30 px-4 py-3 text-xs sm:text-sm text-emerald-900 dark:text-emerald-100 flex items-start justify-between gap-3">
+                    <span>{lastSwapSummary}</span>
+                    <button
+                      type="button"
+                      onClick={() => setLastSwapSummary("")}
+                      className="text-emerald-700 dark:text-emerald-300 shrink-0"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+
                 {!cart || cart.items.length === 0 ? (
                   <div className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200 dark:border-white/5 p-12 text-center space-y-3 shadow-sm dark:shadow-none">
                     <ShoppingBasket className="w-12 h-12 mx-auto text-slate-400 dark:text-slate-600" />
@@ -2232,6 +2294,19 @@ export default function App() {
           })}
         </div>
       </nav>
+
+      {/* MODAL: ⭐ KEDVELT TERMÉKEK -> KIFLI SAJÁTMÁRKA CSERE POPUP */}
+      {favoriteSwapModal && (
+        <PrivateLabelSwapModal
+          autoSwappedCount={favoriteSwapModal.autoSwappedCount}
+          autoSavingsFt={favoriteSwapModal.autoSavingsFt}
+          proposals={favoriteSwapModal.proposals}
+          busy={busyAction === "apply-fav-swaps"}
+          onClose={() => setFavoriteSwapModal(null)}
+          onSwapOne={(proposal) => handleApplyFavoriteSwaps([proposal])}
+          onSwapAll={(remaining) => handleApplyFavoriteSwaps(remaining)}
+        />
+      )}
 
       {/* MODAL: 🔥 KAJA TINDER (Swipe jobbra/balra 0 AI tokennel!) */}
       {tinderOpen && (

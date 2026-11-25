@@ -19,6 +19,7 @@ from app.kifli_mcp import KifliMCPManager
 from app.llm_agent import ChefShoppingAgent
 from app.media import save_recipe_image_bytes
 from app.otthon_mcp_server import OptionalPinASGIWrapper, create_otthon_mcp_server
+from app.private_label import execute_cart_swaps, optimize_cart_private_label_structured
 from app.scheduler_and_bot import BotAndSchedulerRuntime
 from app.smart_restock import analyze_smart_restock
 from starlette.routing import Route
@@ -113,6 +114,16 @@ class TinderSwipeInput(BaseModel):
     user_slot: str = "p1"
     recipe_id: int
     decision: str = "like"
+
+
+class CartSwapItemInput(BaseModel):
+    old_product_id: int
+    new_product_id: int
+    new_quantity: int = 1
+
+
+class CartApplySwapsInput(BaseModel):
+    swaps: list[CartSwapItemInput] = Field(min_length=1)
 
 
 def create_app(custom_settings: Settings | None = None, enable_background: bool | None = None) -> FastAPI:
@@ -526,9 +537,29 @@ def create_app(custom_settings: Settings | None = None, enable_background: bool 
     @app.post("/api/kifli/cart/optimize-private-label", dependencies=[Depends(verify_pin)])
     async def optimize_cart_private_label() -> dict[str, Any]:
         try:
-            reply = await agent.optimize_cart_with_private_label()
-            cart_data = await get_live_kifli_cart()
-            return {"reply": reply, "cart": cart_data}
+            current_cart = await get_live_kifli_cart()
+            res = await optimize_cart_private_label_structured(
+                db=db, kifli=kifli, agent=agent, parsed_cart=current_cart
+            )
+            fresh_cart = await get_live_kifli_cart() if res["auto_swapped"] else current_cart
+            return {
+                "cart": fresh_cart,
+                "auto_swapped": res["auto_swapped"],
+                "auto_savings_ft": res["auto_savings_ft"],
+                "favorite_proposals": res["favorite_proposals"],
+                "message": res["message"],
+            }
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/kifli/cart/apply-swaps", dependencies=[Depends(verify_pin)])
+    async def apply_cart_swaps(payload: CartApplySwapsInput) -> dict[str, Any]:
+        try:
+            applied = await execute_cart_swaps(
+                kifli, [s.model_dump() for s in payload.swaps]
+            )
+            fresh_cart = await get_live_kifli_cart()
+            return {"applied_count": len(applied), "cart": fresh_cart}
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 

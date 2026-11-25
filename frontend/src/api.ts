@@ -215,6 +215,30 @@ export interface TinderSwipeResult {
   session: TinderSessionState;
 }
 
+export interface PrivateLabelSwapProposal {
+  old_product_id: number;
+  old_name: string;
+  old_quantity: number;
+  old_price_ft: number;
+  old_image_url: string;
+  new_product_id: number;
+  new_name: string;
+  new_brand: string;
+  new_amount: string;
+  new_quantity: number;
+  new_unit_price_ft: number;
+  new_price_ft: number;
+  savings_ft: number;
+}
+
+export interface OptimizePrivateLabelResponse {
+  cart: KifliCart;
+  auto_swapped: PrivateLabelSwapProposal[];
+  auto_savings_ft: number;
+  favorite_proposals: PrivateLabelSwapProposal[];
+  message: string;
+}
+
 export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",

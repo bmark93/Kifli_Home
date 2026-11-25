@@ -457,3 +457,50 @@ def test_couple_tinder_match_planner_settings_and_smart_restock(tmp_path: Path) 
     assert preds[0]["name"] == "Zewa papírzsebkendő"
     assert preds[0]["urgency"] == "overdue"
     assert preds[0]["avg_interval_days"] == 20.0
+
+
+def test_private_label_auto_vs_favorite_split(tmp_path: Path) -> None:
+    from app.private_label import (
+        extract_favorite_product_ids,
+        is_kifli_private_label,
+        split_auto_vs_favorite_swaps,
+    )
+
+    assert is_kifli_private_label("Miil ESL Tej 2,8%", "Miil") is True
+    assert is_kifli_private_label("Magyar Tej ESL 2,8%", "Magyar Tej") is False
+
+    db = Database(tmp_path / "pl.db")
+    db.save_product_preference("tej", "16321", "Magyar Tej ESL Tej 2,8%")
+
+    fav_ids, fav_labels = extract_favorite_product_ids(
+        db, '{"data": [{"productId": 97249, "productName": "Zewa Deluxe"}]}'
+    )
+    assert 16321 in fav_ids
+    assert 97249 in fav_ids
+
+    candidates = [
+        {
+            "old_product_id": 16321,
+            "old_name": "Magyar Tej ESL Tej 2,8%",
+            "new_product_id": 97506,
+            "new_name": "Miil ESL tej",
+            "savings_ft": 180,
+        },
+        {
+            "old_product_id": 55555,
+            "old_name": "Drága tészta 500g",
+            "new_product_id": 88888,
+            "new_name": "Kitchin spagetti 500g",
+            "savings_ft": 350,
+        },
+        {
+            "old_product_id": 97249,
+            "old_name": "Zewa Deluxe",
+            "new_product_id": 105944,
+            "new_name": "Moddia papírzsebkendő",
+            "savings_ft": 290,
+        },
+    ]
+    auto_swaps, fav_proposals = split_auto_vs_favorite_swaps(candidates, fav_ids, fav_labels)
+    assert [a["old_product_id"] for a in auto_swaps] == [55555]
+    assert {f["old_product_id"] for f in fav_proposals} == {16321, 97249}
