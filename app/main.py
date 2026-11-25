@@ -162,6 +162,7 @@ class PlannerSettingsInput(BaseModel):
     plan_days: int | None = None
     days_per_meal: int | None = None
     weekly_budget_ft: int | None = None
+    daily_calorie_target: int | None = None
     allergens: list[str] | None = None
     prefer_private_label: bool | None = None
     prefer_discounts_and_save_food: bool | None = None
