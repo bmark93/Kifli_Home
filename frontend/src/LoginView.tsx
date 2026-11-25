@@ -106,7 +106,7 @@ export function LoginView({ config, theme, onToggleTheme, onAuthenticated }: Pro
                 kifli<span className="text-amber-200">.otthon</span>
               </div>
               <div className="text-xs font-semibold text-emerald-100 mt-1">
-                Heti Menü · Kaja Tinder · Kifli.hu MCP
+                Heti Menü · Közös Menüválasztó · Kifli.hu MCP
               </div>
             </div>
           </div>
@@ -119,8 +119,8 @@ export function LoginView({ config, theme, onToggleTheme, onAuthenticated }: Pro
             <div className="flex items-start gap-2.5">
               <Flame className="w-4 h-4 text-amber-300 shrink-0 mt-0.5" />
               <span>
-                <strong>Kaja Tinder &amp; Páros Match:</strong> húzogassátok együtt 2 telefonon a
-                recepteket — azonnali heti menü 0 AI tokennel.
+                <strong>Közös Menüválasztó:</strong> pörgessétek együtt 2 telefonon a recepteket —
+                amire mindketten igent mondtok, azonnal bekerül a heti menübe!
               </span>
             </div>
             <div className="flex items-start gap-2.5">

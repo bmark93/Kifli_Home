@@ -483,6 +483,15 @@ def test_couple_tinder_match_planner_settings_and_smart_restock(tmp_path: Path) 
         assert s3["is_match"] is True
         assert s3["matched_recipe"]["id"] == r1_id
         assert len(s3["session"]["matches"]) == 1
+        assert len(s3["session"]["deck_recipes"]) >= 2
+
+        # Közös kedvenc elfogadása /accept végponttal
+        acc = client.post(
+            f"/api/tinder/sessions/{code}/accept",
+            json={"days": ["hetfo", "kedd"], "meal_type": "ebed", "recipe_id": r1_id},
+        )
+        assert acc.status_code == 200
+        assert acc.json()["plan"]["days"]["hetfo"]["ebed"]["recipe_id"] == r1_id
 
     # 3. Smart Restock fogyás-előrejelző determinisztikus teszt
     now = dt.datetime(2026, 11, 25, 10, 0, tzinfo=dt.timezone.utc)

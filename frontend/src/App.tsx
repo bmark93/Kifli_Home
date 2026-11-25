@@ -1021,7 +1021,7 @@ export default function App() {
             <div className="mb-4 rounded-2xl bg-amber-50 dark:bg-amber-950/50 border border-amber-400/40 px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs text-amber-900 dark:text-amber-100">
               <span>
                 🎯 <strong>Interaktív Demo Mód:</strong> szabadon próbálgathatod a szimulált Kifli
-                kosarat, a Sajátmárka-optimalizálót, a Kaja Tindert és a Smart Restockot! (Az élő AI
+                kosarat, a Sajátmárka-optimalizálót, a Menüválasztót és a Smart Restockot! (Az élő AI
                 chathez lépj be saját fiókkal és adj meg saját API kulcsot.)
               </span>
               <button
@@ -1070,10 +1070,10 @@ export default function App() {
                     <button
                       disabled={busyAction !== ""}
                       onClick={() => setTinderOpen({ day: selectedDay, mealType: "ebed" })}
-                      className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-2xl bg-gradient-to-r from-rose-500 to-orange-500 hover:from-rose-400 hover:to-orange-400 active:scale-[0.98] text-xs sm:text-sm font-bold text-white shadow-lg shadow-rose-500/25 transition disabled:opacity-50"
+                      className="flex items-center justify-center gap-1.5 px-4 py-3 rounded-2xl bg-amber-400 hover:bg-amber-300 active:scale-[0.98] text-xs sm:text-sm font-extrabold text-slate-950 shadow-lg transition disabled:opacity-50"
                     >
-                      <Flame className="w-4 h-4" />
-                      <span>Kaja Tinder</span>
+                      <Sparkles className="w-4 h-4" />
+                      <span>Menüválasztó</span>
                     </button>
 
                     <button
@@ -2845,15 +2845,20 @@ export default function App() {
         />
       )}
 
-      {/* MODAL: 🔥 KAJA TINDER (Swipe jobbra/balra 0 AI tokennel!) */}
+      {/* MODAL: ✨ MENÜVÁLASZTÓ (Egyéni & Páros közös választó, 0 AI tokennel!) */}
       {tinderOpen && (
         <FoodTinderSheet
           initialDay={tinderOpen.day}
           initialMealType={tinderOpen.mealType}
+          planDays={plannerSettings.plan_days}
+          daysPerMeal={plannerSettings.days_per_meal}
           recipes={recipes}
           onClose={() => setTinderOpen(null)}
           onAcceptRecipe={async (days, mealType, recipe) => {
             await handleManualSlotSwap(days, mealType, { recipeId: recipe.id });
+          }}
+          onRefreshAfterCoupleAccept={async () => {
+            await loadCore();
           }}
         />
       )}
@@ -2931,7 +2936,7 @@ export default function App() {
               )}
               <div className="flex-1 min-w-0 space-y-1.5">
                 <div className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-                  📸 Recept fotója (Kaja Tinderhez és kártyákhoz)
+                  📸 Recept fotója (Menüválasztóhoz és recept kártyákhoz)
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
                   <label className="cursor-pointer px-3 py-1.5 rounded-xl bg-emerald-600/15 text-emerald-700 dark:text-emerald-300 text-xs font-bold border border-emerald-500/30 hover:bg-emerald-600/25 transition">

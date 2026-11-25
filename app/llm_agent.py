@@ -594,7 +594,7 @@ class ChefShoppingAgent:
                 "tudsz velem beszélgetni, heti menüt generálni és 1 kattintással összeállítani a valódi Kifli.hu kosaradat!\n\n"
                 "**Addig is próbáld ki bátran az élő, 0 AI-tokenes funkciókat itt a Demóban:**\n"
                 "• **🛒 Kosár fül → 🏷️ Spórolás Kifli saját márkákkal** (azonnali csere + kedvenc márkák összehasonlító popup!)\n"
-                "• **📅 Menü fül → 🔥 Kaja Tinder & Páros Match** + kattintásos receptcsere\n"
+                "• **📅 Menü fül → ✨ Menüválasztó (Egyéni & Páros)** + kattintásos receptcsere\n"
                 "• **🧻 Háztartás fül → 🧠 Smart Restock** fogyás-előrejelző"
             )
             self.db.add_chat_message("assistant", demo_reply, source=source, user_id=user_id)

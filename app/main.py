@@ -162,6 +162,12 @@ class TinderSwipeInput(BaseModel):
     decision: str = "like"
 
 
+class TinderAcceptMatchInput(BaseModel):
+    days: list[str] = Field(min_length=1)
+    meal_type: str
+    recipe_id: int
+
+
 class CartSwapItemInput(BaseModel):
     old_product_id: int
     new_product_id: int
@@ -1171,6 +1177,42 @@ def create_app(
                 recipe_id=payload.recipe_id,
                 decision=payload.decision,
             )
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.post("/api/tinder/sessions/{code}/accept")
+    async def accept_tinder_match_api(
+        code: str,
+        payload: TinderAcceptMatchInput,
+        user: dict[str, Any] = Depends(get_current_user),
+    ) -> dict[str, Any]:
+        try:
+            sess = db.get_tinder_session(code)
+            owner_uid = int(sess["owner_user_id"])
+            updated_owner_plan = db.set_weekly_meal_slots_manual(
+                day_keys=payload.days,
+                meal_type=payload.meal_type,
+                recipe_id=payload.recipe_id,
+                user_id=owner_uid,
+            )
+            # Ha a 2. fő másik fiókkal van belépve, az ő menüjébe is tegyük be a közös étel nevét
+            caller_uid = int(user["id"])
+            if caller_uid != owner_uid:
+                rec = next(
+                    (r for r in sess.get("deck_recipes", []) if r["id"] == int(payload.recipe_id)),
+                    None,
+                )
+                if rec:
+                    db.set_weekly_meal_slots_manual(
+                        day_keys=payload.days,
+                        meal_type=payload.meal_type,
+                        custom_title=rec["title"],
+                        user_id=caller_uid,
+                    )
+            return {
+                "plan": updated_owner_plan,
+                "aggregated_shopping": db.aggregate_shopping_list(user_id=owner_uid),
+            }
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 

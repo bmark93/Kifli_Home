@@ -250,6 +250,7 @@ export interface SmartRestockResponse {
 
 export interface TinderSessionState {
   code: string;
+  owner_user_id?: number;
   meal_type: "reggeli" | "ebed" | "vacsora";
   target_days: string[];
   created_at: string;
@@ -257,6 +258,7 @@ export interface TinderSessionState {
   p2_swiped_ids: number[];
   p1_like_count: number;
   p2_like_count: number;
+  deck_recipes?: Recipe[];
   matches: Recipe[];
 }
 

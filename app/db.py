@@ -1702,6 +1702,7 @@ class Database:
             ).fetchall()
 
         owner_uid = int(sess["owner_user_id"])
+        meal_type = str(sess["meal_type"] or "ebed")
         p1_likes: set[int] = set()
         p2_likes: set[int] = set()
         p1_swiped: list[int] = []
@@ -1717,20 +1718,26 @@ class Database:
                 if s["decision"] == "like":
                     p2_likes.add(rid)
 
+        owner_recipes = self.list_recipes(user_id=owner_uid)
+        deck_recipes = [r for r in owner_recipes if meal_type in r["categories"]]
+        if not deck_recipes:
+            deck_recipes = owner_recipes
+
         matched_ids = sorted(p1_likes.intersection(p2_likes))
-        recipes_by_id = {r["id"]: r for r in self.list_recipes(user_id=owner_uid)}
+        recipes_by_id = {r["id"]: r for r in owner_recipes}
         matched_recipes = [recipes_by_id[rid] for rid in matched_ids if rid in recipes_by_id]
 
         return {
             "code": sess["code"],
             "owner_user_id": owner_uid,
-            "meal_type": sess["meal_type"],
+            "meal_type": meal_type,
             "target_days": json.loads(sess["target_days_json"]),
             "created_at": sess["created_at"],
             "p1_swiped_ids": p1_swiped,
             "p2_swiped_ids": p2_swiped,
             "p1_like_count": len(p1_likes),
             "p2_like_count": len(p2_likes),
+            "deck_recipes": deck_recipes,
             "matches": matched_recipes,
         }
 
