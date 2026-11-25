@@ -486,8 +486,32 @@ class ChefShoppingAgent:
             else "Kifli.hu MCP kapcsolat: NINCS BEJELENTKEZVE (menüt és listát tudsz tervezni, de a kosárba rakáshoz kérd meg a felhasználót, hogy lépjen be a Kifli MCP fülön)."
         )
 
+        ps = self.db.get_planner_settings()
+        pref_lines = ["AKTÍV FELHASZNÁLÓI PREFERENCIÁK (KÖTELEZŐ BETARTANI!):"]
+        if ps.get("weekly_budget_ft", 0) > 0:
+            pref_lines.append(
+                f"- HETI BÜDZSÉ KORLÁT: max. {ps['weekly_budget_ft']} Ft! Törekedj rá, hogy a kosár végösszege ez alatt maradjon, és jelezd, ha közelítjük a keretet."
+            )
+        if ps.get("allergens"):
+            pref_lines.append(
+                f"- SZIGORÚ ALLERGÉN / DIÉTA TILTÓLISTA: {', '.join(ps['allergens'])}! "
+                "Ne ajánlj olyan receptet és ne tegyél kosárba olyan terméket, ami ezeket tartalmazza (kétség esetén ellenőrizd a `kifli__get_products_composition_batch` eszközzel!)."
+            )
+        if ps.get("prefer_private_label"):
+            pref_lines.append(
+                "- KIFLI SAJÁTMÁRKA ELŐNYBEN: Ha a felhasználó nem adott meg konkrét kedvenc márkát, részesítsd előnyben a kiváló ár-érték arányú Kifli saját márkákat: **Miil** (tejtermék), **Moddia** (papíráru), **Yutto** (magvak/gabona), **Ubomi** (kávé/ital), **Dacello** (felvágott/hús), **Kitchin** (alapanyag/tészta/konzerv), **Pappudia** (készétel)!"
+            )
+        if ps.get("prefer_discounts_and_save_food"):
+            pref_lines.append(
+                "- AKCIÓK & 'MENTSD MEG AZ ÉTELT' FÓKUSZ: Heti menütervezésnél és kosárépítésnél nézd meg a `kifli__get_discounted_items` kínálatot is, és részesítsd előnyben az akciós / Mentsd meg az ételt termékeket!"
+            )
+        pref_lines.append(
+            f"- CÉL HETI ÁTLAG HEALTHY SCORE: legalább {ps.get('min_healthy_score', 3.4)} / 5.0!"
+        )
+        prefs_block = "\n".join(pref_lines)
+
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": f"{SYSTEM_PROMPT_HU}\n\n[{status_hint}]"},
+            {"role": "system", "content": f"{SYSTEM_PROMPT_HU}\n\n[{status_hint}]\n\n{prefs_block}"},
         ]
         for h in history:
             if h["role"] in ("user", "assistant"):
@@ -555,6 +579,16 @@ class ChefShoppingAgent:
             "4) Köszönj nekünk, mutasd be áttekinthetően a heti menüt (röviden jelezve a heti átlag healthy score-t és ha valamit készlethiány miatt ki kellett hagyni), emeld ki a 🌟 +1 ajánlást, sorold fel mi van az 🧻 Általános listán, és kérdezd meg: 'Mit szólsz hozzá? Módosítsunk valamin, vagy összerakhatom a Kifli kosarat?'"
         )
         return await self.chat(prompt, source="scheduler")
+
+    async def optimize_cart_with_private_label(self) -> str:
+        prompt = (
+            "Nézd át a jelenlegi élő Kifli.hu kosaramat (`kifli__get_cart`), és keress olcsóbb, "
+            "jó minőségű **Kifli saját márkás** alternatívákat (Miil, Moddia, Yutto, Ubomi, Dacello, Kitchin, Pappudia) "
+            "vagy épp akciós helyettesítőket a drágább márkás termékek helyett (figyelve az aktív allergén szűrőkre és kedvenc márkákra)! "
+            "Cseréld le a kosárban azokat a tételeket, ahol érdemi (min. 10%) megtakarítás érhető el, "
+            "majd írd meg tételesen mit mire cseréltél, és pontosan hány Ft-ot spóroltunk vele!"
+        )
+        return await self.chat(prompt, source="web")
 
     async def parse_recipe_from_text_or_url(self, text_or_url: str) -> dict[str, Any]:
         """URL vagy bemásolt szöveg alapján strukturált receptet nyer ki és elmenti."""

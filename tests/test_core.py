@@ -306,14 +306,14 @@ def test_otthon_mcp_server_tools(tmp_path: Path) -> None:
         assert "application/json" in r_init.headers.get("content-type", "")
         assert r_init.json()["result"]["serverInfo"]["name"] == "kifli-otthon"
 
-        # 5. POST tools/list -> 16 tool JSON-ban (új: set_recipe_image, set_recipe_healthy_score, reset_weekly_menu)
+        # 5. POST tools/list -> 18 tool JSON-ban
         r_tools = client.post(
             "/mcp/SecretToken999",
             headers={"Accept": "application/json"},
             json={"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
         )
         assert r_tools.status_code == 200
-        assert len(r_tools.json()["result"]["tools"]) == 16
+        assert len(r_tools.json()["result"]["tools"]) == 18
 
 
 def test_recipe_image_healthy_score_and_weekly_reset(tmp_path: Path) -> None:
@@ -382,3 +382,78 @@ def test_recipe_image_healthy_score_and_weekly_reset(tmp_path: Path) -> None:
         assert reset_resp.status_code == 200
         assert reset_resp.json()["plan"]["days"]["hetfo"] == {}
         assert reset_resp.json()["aggregated_shopping"]["recipe_and_adhoc_items"] == []
+
+
+def test_couple_tinder_match_planner_settings_and_smart_restock(tmp_path: Path) -> None:
+    import datetime as dt
+    from app.smart_restock import compute_restock_predictions_from_events
+
+    settings = _make_settings(tmp_path)
+    app = create_app(custom_settings=settings, enable_background=False)
+
+    with TestClient(app) as client:
+        # 1. Planner Settings mentés & visszaolvasás
+        upd = client.put(
+            "/api/planner-settings",
+            json={
+                "weekly_budget_ft": 42000,
+                "allergens": ["laktóz", "glutén"],
+                "prefer_private_label": True,
+                "prefer_discounts_and_save_food": True,
+                "min_healthy_score": 4.0,
+            },
+        )
+        assert upd.status_code == 200
+        ps = client.get("/api/planner-settings").json()
+        assert ps["weekly_budget_ft"] == 42000
+        assert ps["allergens"] == ["laktóz", "glutén"]
+        assert ps["min_healthy_score"] == 4.0
+
+        # 2. Páros Kaja Tinder Match szoba (p1 + p2 -> IT'S A MATCH!)
+        recipes = client.get("/api/recipes?category=ebed").json()
+        r1_id, r2_id = recipes[0]["id"], recipes[1]["id"]
+
+        sess = client.post(
+            "/api/tinder/sessions",
+            json={"meal_type": "ebed", "target_days": ["hetfo", "kedd"]},
+        ).json()
+        code = sess["code"]
+        assert len(code) == 4
+
+        s1 = client.post(
+            f"/api/tinder/sessions/{code}/swipe",
+            json={"user_slot": "p1", "recipe_id": r1_id, "decision": "like"},
+        ).json()
+        assert s1["is_match"] is False
+
+        s2 = client.post(
+            f"/api/tinder/sessions/{code}/swipe",
+            json={"user_slot": "p2", "recipe_id": r2_id, "decision": "pass"},
+        ).json()
+        assert s2["is_match"] is False
+
+        s3 = client.post(
+            f"/api/tinder/sessions/{code}/swipe",
+            json={"user_slot": "p2", "recipe_id": r1_id, "decision": "like"},
+        ).json()
+        assert s3["is_match"] is True
+        assert s3["matched_recipe"]["id"] == r1_id
+        assert len(s3["session"]["matches"]) == 1
+
+    # 3. Smart Restock fogyás-előrejelző determinisztikus teszt
+    now = dt.datetime(2026, 11, 25, 10, 0, tzinfo=dt.timezone.utc)
+    events = [
+        {"name": "Zewa papírzsebkendő", "ordered_at": "2026-10-15T10:00:00Z", "kifli_product_id": "97249"},
+        {"name": "Zewa papírzsebkendő", "ordered_at": "2026-11-04T10:00:00Z", "kifli_product_id": "97249"},
+        {"name": "Már listán lévő WC papír", "ordered_at": "2026-10-10T10:00:00Z", "kifli_product_id": "115386"},
+        {"name": "Már listán lévő WC papír", "ordered_at": "2026-10-28T10:00:00Z", "kifli_product_id": "115386"},
+    ]
+    preds = compute_restock_predictions_from_events(
+        events,
+        active_general_keys={"már listán lévő wc papír"},
+        now=now,
+    )
+    assert len(preds) == 1
+    assert preds[0]["name"] == "Zewa papírzsebkendő"
+    assert preds[0]["urgency"] == "overdue"
+    assert preds[0]["avg_interval_days"] == 20.0

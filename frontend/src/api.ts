@@ -169,6 +169,52 @@ export interface KifliCart {
   items: KifliCartItem[];
 }
 
+export interface PlannerSettings {
+  weekly_budget_ft: number;
+  allergens: string[];
+  prefer_private_label: boolean;
+  prefer_discounts_and_save_food: boolean;
+  min_healthy_score: number;
+}
+
+export interface SmartRestockItem {
+  name: string;
+  kifli_product_id: string;
+  brand_hint: string;
+  source: string;
+  order_count: number;
+  avg_interval_days: number;
+  days_since_last: number;
+  due_ratio: number;
+  urgency: "overdue" | "soon";
+  reason: string;
+}
+
+export interface SmartRestockResponse {
+  kifli_connected: boolean;
+  kifli_orders_analyzed: number;
+  local_events_analyzed: number;
+  suggestions: SmartRestockItem[];
+}
+
+export interface TinderSessionState {
+  code: string;
+  meal_type: "reggeli" | "ebed" | "vacsora";
+  target_days: string[];
+  created_at: string;
+  p1_swiped_ids: number[];
+  p2_swiped_ids: number[];
+  p1_like_count: number;
+  p2_like_count: number;
+  matches: Recipe[];
+}
+
+export interface TinderSwipeResult {
+  is_match: boolean;
+  matched_recipe: Recipe | null;
+  session: TinderSessionState;
+}
+
 export async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     "Content-Type": "application/json",

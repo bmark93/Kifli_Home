@@ -41,7 +41,9 @@ import {
   type GeneralItem,
   type Ingredient,
   type KifliCart,
+  type PlannerSettings,
   type Recipe,
+  type SmartRestockResponse,
   type StatusInfo,
   type WeeklyPlanResponse,
 } from "./api";
@@ -225,10 +227,18 @@ export default function App() {
     setShowNewRecipeSheet(true);
   }
 
-  // Kifli OAuth & Kamra
+  // Kifli OAuth, Kamra, Tervező preferenciák & Smart Restock
   const [loginUrl, setLoginUrl] = useState<string>("");
   const [callbackUrl, setCallbackUrl] = useState<string>("");
   const [newStaple, setNewStaple] = useState<string>("");
+  const [plannerSettings, setPlannerSettings] = useState<PlannerSettings>({
+    weekly_budget_ft: 0,
+    allergens: [],
+    prefer_private_label: true,
+    prefer_discounts_and_save_food: true,
+    min_healthy_score: 3.4,
+  });
+  const [smartRestock, setSmartRestock] = useState<SmartRestockResponse | null>(null);
 
   function notify(msg: string, kind: "ok" | "err" = "ok") {
     setToast({ msg, kind });
@@ -259,16 +269,63 @@ export default function App() {
 
   async function loadRecipesAndSettings() {
     try {
-      const [rc, stp, prf] = await Promise.all([
+      const [rc, stp, prf, ps] = await Promise.all([
         apiFetch<Recipe[]>("/api/recipes"),
         apiFetch<Array<{ key: string; display_name: string }>>("/api/staples"),
         apiFetch<any[]>("/api/preferences"),
+        apiFetch<PlannerSettings>("/api/planner-settings"),
       ]);
       setRecipes(rc);
       setStaples(stp);
       setPrefs(prf);
+      setPlannerSettings(ps);
     } catch {
       // silent
+    }
+  }
+
+  async function savePlannerSettings(patch: Partial<PlannerSettings>) {
+    const merged = { ...plannerSettings, ...patch };
+    setPlannerSettings(merged);
+    try {
+      const saved = await apiFetch<PlannerSettings>("/api/planner-settings", {
+        method: "PUT",
+        body: JSON.stringify(patch),
+      });
+      setPlannerSettings(saved);
+      notify("✅ Tervező preferenciák elmentve!");
+    } catch (e: any) {
+      notify(e.message, "err");
+    }
+  }
+
+  async function loadSmartRestock() {
+    setBusyAction("restock");
+    try {
+      const data = await apiFetch<SmartRestockResponse>("/api/smart-restock");
+      setSmartRestock(data);
+    } catch (e: any) {
+      notify(e.message, "err");
+    } finally {
+      setBusyAction("");
+    }
+  }
+
+  async function handleOptimizePrivateLabel() {
+    setBusyAction("optimize-pl");
+    try {
+      const res = await apiFetch<{ reply: string; cart: KifliCart }>(
+        "/api/kifli/cart/optimize-private-label",
+        { method: "POST" }
+      );
+      setCart(res.cart);
+      await loadCore();
+      setActiveTab("chat");
+      notify("🏷️ Kifli sajátmárka-optimalizálás kész! Nézd meg a megtakarítást a chatben.");
+    } catch (e: any) {
+      notify(e.message, "err");
+    } finally {
+      setBusyAction("");
     }
   }
 
@@ -1295,6 +1352,44 @@ export default function App() {
                   </button>
                 </div>
 
+                {/* Heti büdzsé állapotsáv (ha be van állítva keret) */}
+                {plannerSettings.weekly_budget_ft > 0 && (
+                  <div className="rounded-2xl bg-black/20 p-3 space-y-1.5 text-xs">
+                    <div className="flex justify-between font-semibold">
+                      <span>Heti keret ({formatFt(plannerSettings.weekly_budget_ft)})</span>
+                      <span
+                        className={
+                          (cart?.total_price || 0) > plannerSettings.weekly_budget_ft
+                            ? "text-rose-200"
+                            : "text-emerald-200"
+                        }
+                      >
+                        {Math.round(
+                          ((cart?.total_price || 0) / plannerSettings.weekly_budget_ft) * 100
+                        )}
+                        %
+                      </span>
+                    </div>
+                    <div className="h-2 rounded-full bg-white/15 overflow-hidden">
+                      <div
+                        style={{
+                          width: `${Math.min(
+                            100,
+                            Math.round(
+                              ((cart?.total_price || 0) / plannerSettings.weekly_budget_ft) * 100
+                            )
+                          )}%`,
+                        }}
+                        className={`h-full rounded-full transition-all ${
+                          (cart?.total_price || 0) > plannerSettings.weekly_budget_ft
+                            ? "bg-rose-400"
+                            : "bg-emerald-300"
+                        }`}
+                      />
+                    </div>
+                  </div>
+                )}
+
                 <div className="space-y-2.5">
                   <a
                     href="https://www.kifli.hu/rendeles/kosaram-tartalma"
@@ -1305,6 +1400,22 @@ export default function App() {
                     <span>Megnyitás &amp; Fizetés a Kifli.hu-n</span>
                     <ExternalLink className="w-4 h-4" />
                   </a>
+
+                  {cart && cart.item_count > 0 && (
+                    <button
+                      type="button"
+                      disabled={busyAction !== ""}
+                      onClick={handleOptimizePrivateLabel}
+                      className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/15 hover:bg-white/25 border border-white/20 text-white font-semibold text-xs sm:text-sm transition disabled:opacity-50"
+                    >
+                      <Sparkles className="w-4 h-4 text-amber-200" />
+                      <span>
+                        {busyAction === "optimize-pl"
+                          ? "Sajátmárka keresése..."
+                          : "🏷️ Spórolás Kifli saját márkákkal"}
+                      </span>
+                    </button>
+                  )}
 
                   {inCartGeneralCount > 0 && (
                     <button
@@ -1379,8 +1490,89 @@ export default function App() {
                 </div>
               </form>
 
-              {/* Jobb: Státusz sáv + többoszlopos lista */}
+              {/* Jobb: Smart Restock + Státusz sáv + többoszlopos lista */}
               <div className="xl:col-span-8 space-y-4">
+                {/* 🧠 Smart Restock Fogyás-előrejelző (0 AI token!) */}
+                <div className="rounded-3xl bg-white dark:bg-[#11192a] border border-slate-200/80 dark:border-white/5 p-4 sm:p-5 space-y-3 shadow-sm dark:shadow-none">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 className="font-bold text-sm sm:text-base text-slate-900 dark:text-white">
+                        🧠 Smart Restock — Fogyás-előrejelző (0 AI token)
+                      </h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Kiszámolja a korábbi Kifli rendeléseidből és háztartási előzményeidből, mi fogyhatott el épp itthon.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={busyAction === "restock"}
+                      onClick={loadSmartRestock}
+                      className="px-3.5 py-2 rounded-xl bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 font-bold text-xs flex items-center gap-1.5"
+                    >
+                      <RefreshCw
+                        className={`w-3.5 h-3.5 ${busyAction === "restock" ? "animate-spin" : ""}`}
+                      />
+                      <span>{busyAction === "restock" ? "Elemzés..." : "Elemzés futtatása"}</span>
+                    </button>
+                  </div>
+
+                  {smartRestock && (
+                    smartRestock.suggestions.length === 0 ? (
+                      <p className="text-xs text-slate-500 dark:text-slate-400 pt-1">
+                        Még nincs elég ismétlődő rendelési adat ({smartRestock.kifli_orders_analyzed} Kifli rendelés + {smartRestock.local_events_analyzed} helyi tétel elemezve). 2–3 rendelés után automatikusan előrejelzi a fogyó tételeket!
+                      </p>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2 pt-1">
+                        {smartRestock.suggestions.map((sug, idx) => (
+                          <div
+                            key={idx}
+                            className="rounded-2xl bg-slate-50 dark:bg-[#090d16] border border-slate-200/80 dark:border-white/10 p-3 flex items-center justify-between gap-2"
+                          >
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span
+                                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                    sug.urgency === "overdue"
+                                      ? "bg-rose-500/15 text-rose-600 dark:text-rose-300"
+                                      : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
+                                  }`}
+                                >
+                                  {sug.urgency === "overdue" ? "Esedékes" : "Hamarosan"}
+                                </span>
+                                <span className="font-semibold text-xs text-slate-900 dark:text-white truncate">
+                                  {sug.name}
+                                </span>
+                              </div>
+                              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-1">
+                                {sug.reason}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                await apiFetch("/api/general-items", {
+                                  method: "POST",
+                                  body: JSON.stringify({
+                                    name: sug.name,
+                                    quantity: 1,
+                                    unit: "db",
+                                    brand_hint: sug.brand_hint,
+                                  }),
+                                });
+                                await Promise.all([loadCore(), loadSmartRestock()]);
+                                notify(`🧻 Felírva: ${sug.name}`);
+                              }}
+                              className="shrink-0 px-3 py-1.5 rounded-xl bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950 font-bold text-xs"
+                            >
+                              + Felír
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )
+                  )}
+                </div>
+
                 {inCartGeneralCount > 0 && (
                   <div className="rounded-2xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-500/30 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="text-xs sm:text-sm text-emerald-900 dark:text-emerald-100">
@@ -1804,7 +1996,141 @@ export default function App() {
                 )}
               </div>
 
-              {/* 4. Kártya (Teljes szélességű): SAJÁT KIFLI OTTHON MCP SZERVER CLAUDE-HOZ */}
+              {/* 4. Kártya (Teljes szélességű): 🥗 TERVEZŐ PREFERENCIÁK (Büdzsé, Allergének, Sajátmárka, Akciók) */}
+              <div className="lg:col-span-3 rounded-3xl bg-white dark:bg-[#11192a] border border-slate-200/80 dark:border-white/5 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
+                <div>
+                  <h3 className="font-bold text-base text-slate-900 dark:text-white">
+                    🥗 Heti Tervező &amp; Kosár Preferenciák (Büdzsé · Allergének · Sajátmárka · Akciók)
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Az AI séf heti menütervezéskor és Kifli kosárépítéskor szigorúan betartja ezeket a szabályokat.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                  {/* Heti büdzsé */}
+                  <div className="rounded-2xl bg-slate-50 dark:bg-[#090d16] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
+                    <label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                      💰 Heti büdzsé limit (Ft, 0 = nincs limit)
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="number"
+                        step={1000}
+                        min={0}
+                        value={plannerSettings.weekly_budget_ft}
+                        onChange={(e) =>
+                          setPlannerSettings((p) => ({
+                            ...p,
+                            weekly_budget_ft: Math.max(0, parseInt(e.target.value || "0", 10)),
+                          }))
+                        }
+                        className="flex-1 bg-white dark:bg-[#11192a] text-slate-900 dark:text-white rounded-xl px-3 py-2 text-sm border border-slate-200 dark:border-white/10"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          savePlannerSettings({ weekly_budget_ft: plannerSettings.weekly_budget_ft })
+                        }
+                        className="px-3 py-2 rounded-xl bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950 font-bold text-xs"
+                      >
+                        Ment
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Min. Healthy Score */}
+                  <div className="rounded-2xl bg-slate-50 dark:bg-[#090d16] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
+                    <div className="flex justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
+                      <span>💚 Cél heti Healthy Score</span>
+                      <span className="text-emerald-600 dark:text-emerald-400">
+                        {plannerSettings.min_healthy_score.toFixed(1)} / 5.0
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={1.5}
+                      max={5.0}
+                      step={0.1}
+                      value={plannerSettings.min_healthy_score}
+                      onChange={(e) =>
+                        setPlannerSettings((p) => ({
+                          ...p,
+                          min_healthy_score: parseFloat(e.target.value),
+                        }))
+                      }
+                      onMouseUp={() =>
+                        savePlannerSettings({ min_healthy_score: plannerSettings.min_healthy_score })
+                      }
+                      onTouchEnd={() =>
+                        savePlannerSettings({ min_healthy_score: plannerSettings.min_healthy_score })
+                      }
+                      className="w-full accent-emerald-500"
+                    />
+                  </div>
+
+                  {/* Sajátmárka + Akciók kapcsolók */}
+                  <div className="rounded-2xl bg-slate-50 dark:bg-[#090d16] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2.5">
+                    <label className="flex items-center justify-between gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer">
+                      <span>🏷️ Kifli sajátmárkák előnyben (Miil, Moddia, Yutto)</span>
+                      <input
+                        type="checkbox"
+                        checked={plannerSettings.prefer_private_label}
+                        onChange={(e) =>
+                          savePlannerSettings({ prefer_private_label: e.target.checked })
+                        }
+                        className="w-4 h-4 accent-emerald-500"
+                      />
+                    </label>
+                    <label className="flex items-center justify-between gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer">
+                      <span>♻️ Akciók &amp; Mentsd meg az ételt előnyben</span>
+                      <input
+                        type="checkbox"
+                        checked={plannerSettings.prefer_discounts_and_save_food}
+                        onChange={(e) =>
+                          savePlannerSettings({
+                            prefer_discounts_and_save_food: e.target.checked,
+                          })
+                        }
+                        className="w-4 h-4 accent-emerald-500"
+                      />
+                    </label>
+                  </div>
+
+                  {/* Allergén tiltólista */}
+                  <div className="rounded-2xl bg-slate-50 dark:bg-[#090d16] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
+                    <div className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                      🚫 Allergén / Diéta szűrő
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {["laktóz", "glutén", "diófélék", "tojás", "szója", "hal"].map((al) => {
+                        const active = plannerSettings.allergens.includes(al);
+                        return (
+                          <button
+                            type="button"
+                            key={al}
+                            onClick={() => {
+                              const next = active
+                                ? plannerSettings.allergens.filter((x) => x !== al)
+                                : [...plannerSettings.allergens, al];
+                              savePlannerSettings({ allergens: next });
+                            }}
+                            className={`px-2.5 py-1 rounded-xl text-[11px] font-bold border transition ${
+                              active
+                                ? "bg-rose-500 text-white border-rose-500"
+                                : "bg-white dark:bg-[#11192a] text-slate-600 dark:text-slate-400 border-slate-200 dark:border-white/10"
+                            }`}
+                          >
+                            {active ? `✕ ${al}` : al}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 5. Kártya (Teljes szélességű): SAJÁT KIFLI OTTHON MCP SZERVER CLAUDE-HOZ */}
               <div className="lg:col-span-3 rounded-3xl bg-white dark:bg-[#11192a] border border-emerald-500/30 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5">

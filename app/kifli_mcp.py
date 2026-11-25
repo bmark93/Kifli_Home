@@ -53,6 +53,7 @@ ESSENTIAL_KIFLI_TOOLS = {
     "batch_search_products",
     "search_products",
     "get_product_details",
+    "get_products_composition_batch",
     "get_discounted_items",
     "get_cart",
     "get_cart_content",
