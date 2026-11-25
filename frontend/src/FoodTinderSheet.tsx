@@ -95,7 +95,9 @@ export function FoodTinderSheet({
   const [joinCodeInput, setJoinCodeInput] = useState<string>("");
   const [coupleError, setCoupleError] = useState<string>("");
   const [celebrateMatch, setCelebrateMatch] = useState<Recipe | null>(null);
+  const [completedBanner, setCompletedBanner] = useState<string>("");
   const seenMatchIds = useRef<Set<number>>(new Set());
+  const seenAcceptedCount = useRef<number>(0);
 
   // 3D Swipe fizika
   const [dragX, setDragX] = useState<number>(0);
@@ -127,7 +129,7 @@ export function FoodTinderSheet({
     setFlyDir(null);
   }, [mealType, healthyOnly, deckSeed, mode, coupleSession?.code]);
 
-  // Élő szinkronizálás (2 mp) a 2 telefon között
+  // Élő szinkronizálás (2 mp) a 2 telefon között (napok + elfogadott közös találatok + befejezés)
   useEffect(() => {
     if (mode !== "couple" || !coupleSession?.code) return;
     const timer = setInterval(async () => {
@@ -136,8 +138,39 @@ export function FoodTinderSheet({
           `/api/tinder/sessions/${coupleSession.code}`
         );
         setCoupleSession(fresh);
+        if (fresh.target_days && fresh.target_days.length) {
+          setSelectedDays(fresh.target_days);
+        }
+        const accepted = fresh.accepted_matches || [];
+        const acceptedIds = new Set(accepted.map((a) => a.recipe_id));
+
+        if (accepted.length > seenAcceptedCount.current) {
+          seenAcceptedCount.current = accepted.length;
+          const newest = accepted[accepted.length - 1];
+          if (newest) {
+            const dNames = newest.days
+              .map((dk) => DAYS_LIST.find((d) => d.key === dk)?.short || dk)
+              .join("+");
+            setLastPicked(`💚 Szinkronizálva: ${newest.title} (${dNames})`);
+          }
+          if (onRefreshAfterCoupleAccept) {
+            await onRefreshAfterCoupleAccept();
+          }
+        }
+
+        // Ha a párod már betette a jelenleg ünnepelt ételt, csukjuk be a modált
+        setCelebrateMatch((prev) => (prev && acceptedIds.has(prev.id) ? null : prev));
+
+        if (fresh.is_completed && !completedBanner) {
+          const mealWord = mealType === "reggeli" ? "reggeli" : mealType === "ebed" ? "ebéd" : "vacsora";
+          setCelebrateMatch(null);
+          setCompletedBanner(`Megvan a hétre a közös ${mealWord}!`);
+          setTimeout(() => onClose(), 1800);
+          return;
+        }
+
         for (const m of fresh.matches) {
-          if (!seenMatchIds.current.has(m.id)) {
+          if (!seenMatchIds.current.has(m.id) && !acceptedIds.has(m.id)) {
             seenMatchIds.current.add(m.id);
             setCelebrateMatch(m);
             break;
@@ -148,18 +181,54 @@ export function FoodTinderSheet({
       }
     }, 2000);
     return () => clearInterval(timer);
-  }, [mode, coupleSession?.code]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, coupleSession?.code, completedBanner, mealType]);
 
   const current = deck[index] || null;
   const nextCard = deck[index + 1] || null;
   const thirdCard = deck[index + 2] || null;
 
+  function triggerWeekCompleted(chosenMealType: MealType, extraNote?: string) {
+    const mealWord =
+      chosenMealType === "reggeli"
+        ? "reggeli"
+        : chosenMealType === "ebed"
+        ? "ebéd"
+        : "vacsora";
+    setCelebrateMatch(null);
+    setCompletedBanner(
+      extraNote || `Megvan a hétre a(z) ${mealWord}!`
+    );
+    setTimeout(() => {
+      onClose();
+    }, 1800);
+  }
+
+  function isFinalStepOfWeek(chosenDays: string[]): boolean {
+    if (!availableDays.length) return true;
+    // Ha minden elérhető nap ki volt választva (pl. H-V), vagy elértük az utolsó napot (pl. Vasárnap)
+    if (chosenDays.length >= availableDays.length) return true;
+    const indices = chosenDays
+      .map((dk) => availableDays.findIndex((d) => d.key === dk))
+      .filter((i) => i >= 0);
+    if (!indices.length) return false;
+    return Math.max(...indices) >= availableDays.length - 1;
+  }
+
   function toggleDay(dk: string) {
     setSelectedDays((prev) => {
-      if (prev.includes(dk)) {
-        return prev.length > 1 ? prev.filter((x) => x !== dk) : prev;
+      const next = prev.includes(dk)
+        ? prev.length > 1
+          ? prev.filter((x) => x !== dk)
+          : prev
+        : [...prev, dk];
+      if (mode === "couple" && coupleSession?.code) {
+        apiFetch(`/api/tinder/sessions/${coupleSession.code}/days`, {
+          method: "PUT",
+          body: JSON.stringify({ target_days: next }),
+        }).catch(() => {});
       }
-      return [...prev, dk];
+      return next;
     });
   }
 
@@ -248,6 +317,11 @@ export function FoodTinderSheet({
         const dayNames = selectedDays
           .map((dk) => DAYS_LIST.find((d) => d.key === dk)?.short || dk)
           .join("+");
+        if (isFinalStepOfWeek(selectedDays)) {
+          setLastPicked(`✅ ${current.title} (${dayNames})`);
+          triggerWeekCompleted(mealType);
+          return;
+        }
         const nextDays = advanceSelectedDays(selectedDays);
         setSelectedDays(nextDays);
         const nextLabel = nextDays
@@ -278,7 +352,12 @@ export function FoodTinderSheet({
         : [availableDays[0].key];
 
       if (mode === "couple" && coupleSession) {
-        await apiFetch(`/api/tinder/sessions/${coupleSession.code}/accept`, {
+        const res = await apiFetch<{
+          already_accepted?: boolean;
+          placed_days?: string[];
+          is_completed?: boolean;
+          session: TinderSessionState;
+        }>(`/api/tinder/sessions/${coupleSession.code}/accept`, {
           method: "POST",
           body: JSON.stringify({
             days: targetD,
@@ -286,21 +365,46 @@ export function FoodTinderSheet({
             recipe_id: celebrateMatch.id,
           }),
         });
+        setCoupleSession(res.session);
+        seenAcceptedCount.current = (res.session.accepted_matches || []).length;
+        if (res.session.target_days?.length) {
+          setSelectedDays(res.session.target_days);
+        }
         if (onRefreshAfterCoupleAccept) await onRefreshAfterCoupleAccept();
+
+        const placed = res.placed_days?.length ? res.placed_days : targetD;
+        const dayNames = placed
+          .map((dk) => DAYS_LIST.find((d) => d.key === dk)?.short || dk)
+          .join("+");
+
+        if (res.is_completed || isFinalStepOfWeek(placed)) {
+          setLastPicked(`💚 Közös kedvenc mentve: ${celebrateMatch.title} (${dayNames})`);
+          triggerWeekCompleted(mealType);
+          return;
+        }
+        const nextLabel = (res.session.target_days || [])
+          .map((dk) => DAYS_LIST.find((d) => d.key === dk)?.label || dk)
+          .join(" + ");
+        setLastPicked(`💚 Közös kedvenc mentve: ${celebrateMatch.title} (${dayNames}) · Köv.: ${nextLabel}`);
+        setCelebrateMatch(null);
       } else {
         await onAcceptRecipe(targetD, mealType, celebrateMatch);
+        const dayNames = targetD
+          .map((dk) => DAYS_LIST.find((d) => d.key === dk)?.short || dk)
+          .join("+");
+        if (isFinalStepOfWeek(targetD)) {
+          setLastPicked(`💚 Mentve: ${celebrateMatch.title} (${dayNames})`);
+          triggerWeekCompleted(mealType);
+          return;
+        }
+        const nextDays = advanceSelectedDays(targetD);
+        setSelectedDays(nextDays);
+        const nextLabel = nextDays
+          .map((dk) => DAYS_LIST.find((d) => d.key === dk)?.label || dk)
+          .join(" + ");
+        setLastPicked(`💚 Mentve: ${celebrateMatch.title} (${dayNames}) · Köv.: ${nextLabel}`);
+        setCelebrateMatch(null);
       }
-
-      const dayNames = targetD
-        .map((dk) => DAYS_LIST.find((d) => d.key === dk)?.short || dk)
-        .join("+");
-      const nextDays = advanceSelectedDays(targetD);
-      setSelectedDays(nextDays);
-      const nextLabel = nextDays
-        .map((dk) => DAYS_LIST.find((d) => d.key === dk)?.label || dk)
-        .join(" + ");
-      setLastPicked(`💚 Közös kedvenc mentve: ${celebrateMatch.title} (${dayNames}) · Köv.: ${nextLabel}`);
-      setCelebrateMatch(null);
     } finally {
       setSaving(false);
     }
@@ -595,6 +699,29 @@ export function FoodTinderSheet({
         {lastPicked && (
           <div className="px-4 py-1.5 bg-emerald-600 text-white text-xs font-semibold text-center">
             {lastPicked}
+          </div>
+        )}
+
+        {/* HÉT KÉSZ — AUTOMATIKUS KILÉPÉS OVERLAY */}
+        {completedBanner && (
+          <div className="absolute inset-0 z-40 bg-emerald-950/92 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center animate-in fade-in">
+            <div className="w-20 h-20 rounded-full bg-[#6FA014] text-white flex items-center justify-center shadow-2xl shadow-[#6FA014]/40 mb-4">
+              <Check className="w-10 h-10 stroke-[3]" />
+            </div>
+            <h3 className="text-2xl font-black text-white">{completedBanner}</h3>
+            {lastPicked && (
+              <p className="text-sm text-emerald-100 mt-2 font-medium">{lastPicked}</p>
+            )}
+            <p className="text-xs text-emerald-300/80 mt-2">
+              Visszatérés a heti menühöz...
+            </p>
+            <button
+              type="button"
+              onClick={onClose}
+              className="mt-5 px-6 py-2.5 rounded-2xl bg-white text-emerald-950 font-extrabold text-sm shadow-lg"
+            >
+              Vissza a heti menühöz
+            </button>
           </div>
         )}
 

@@ -125,7 +125,36 @@ export interface Recipe {
   protein_g: number;
   carbs_g: number;
   fat_g: number;
+  is_public?: boolean;
+  copied_count?: number;
   ingredients: Ingredient[];
+}
+
+export interface CommunityRecipe extends Recipe {
+  author_name: string;
+  is_mine: boolean;
+}
+
+export interface KifliRecipeItem {
+  kifli_recipe_id: number;
+  title: string;
+  categories: string[];
+  servings: number;
+  duration?: string;
+  image_url: string;
+  ingredients_preview: string;
+  healthy_score: number;
+  kcal_per_serving: number;
+  protein_g: number;
+  carbs_g: number;
+  fat_g: number;
+}
+
+export interface KifliRecipeSearchResponse {
+  is_live_kifli: boolean;
+  query: string;
+  recipes: KifliRecipeItem[];
+  warning?: string;
 }
 
 export const HEALTHY_META: Record<
@@ -248,11 +277,20 @@ export interface SmartRestockResponse {
   suggestions: SmartRestockItem[];
 }
 
+export interface TinderAcceptedMatch {
+  recipe_id: number;
+  title: string;
+  days: string[];
+  meal_type: "reggeli" | "ebed" | "vacsora";
+}
+
 export interface TinderSessionState {
   code: string;
   owner_user_id?: number;
   meal_type: "reggeli" | "ebed" | "vacsora";
   target_days: string[];
+  accepted_matches?: TinderAcceptedMatch[];
+  is_completed?: boolean;
   created_at: string;
   p1_swiped_ids: number[];
   p2_swiped_ids: number[];
@@ -260,6 +298,22 @@ export interface TinderSessionState {
   p2_like_count: number;
   deck_recipes?: Recipe[];
   matches: Recipe[];
+}
+
+export interface HouseholdMember {
+  id: number;
+  email: string;
+  display_name: string;
+  is_owner: boolean;
+  is_me: boolean;
+}
+
+export interface HouseholdInfo {
+  workspace_user_id: number;
+  is_owner: boolean;
+  owner_name: string;
+  join_code: string;
+  members: HouseholdMember[];
 }
 
 export interface TinderSwipeResult {
