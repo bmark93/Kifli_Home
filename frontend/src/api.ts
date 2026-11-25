@@ -133,7 +133,7 @@ export const HEALTHY_META: Record<
   { label: string; emoji: string; badgeClass: string }
 > = {
   1: {
-    label: "Bűnözős",
+    label: "Kiadósabb",
     emoji: "🍔",
     badgeClass: "bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30",
   },

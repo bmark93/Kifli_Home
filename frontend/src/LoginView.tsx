@@ -119,8 +119,8 @@ export function LoginView({ config, theme, onToggleTheme, onAuthenticated }: Pro
             <div className="flex items-start gap-2.5">
               <Flame className="w-4 h-4 text-amber-300 shrink-0 mt-0.5" />
               <span>
-                <strong>Közös Menüválasztó:</strong> pörgessétek együtt 2 telefonon a recepteket —
-                amire mindketten igent mondtok, azonnal bekerül a heti menübe!
+                <strong>Közös Menüválasztó:</strong> válogassátok ki együtt 2 telefonon a
+                recepteket — amire mindketten igent mondtok, azonnal bekerül a heti menübe!
               </span>
             </div>
             <div className="flex items-start gap-2.5">

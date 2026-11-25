@@ -756,7 +756,7 @@ export function FoodTinderSheet({
                           style={{ opacity: likeOpacity }}
                           className="absolute top-4 left-4 px-4 py-1.5 rounded-2xl bg-[#6FA014]/90 text-white font-black text-base tracking-wide shadow-xl backdrop-blur-md -rotate-6 border border-white/30"
                         >
-                          JÖHET! 💚
+                          VÁLASZTOM 💚
                         </div>
                       )}
                       {passOpacity > 0.05 && (
@@ -764,7 +764,7 @@ export function FoodTinderSheet({
                           style={{ opacity: passOpacity }}
                           className="absolute top-4 right-4 px-4 py-1.5 rounded-2xl bg-rose-600/90 text-white font-black text-base tracking-wide shadow-xl backdrop-blur-md rotate-6 border border-white/30"
                         >
-                          KIHAGYOM ✕
+                          TOVÁBB ✕
                         </div>
                       )}
 
@@ -842,7 +842,7 @@ export function FoodTinderSheet({
                 className="flex-1 max-w-[130px] h-14 rounded-2xl bg-white dark:bg-[#1C2218] border-2 border-rose-500/30 text-rose-600 dark:text-rose-400 hover:bg-rose-500 hover:text-white hover:border-rose-500 flex items-center justify-center gap-1.5 font-extrabold text-sm shadow-lg active:scale-95 transition disabled:opacity-30"
               >
                 <X className="w-5 h-5" />
-                <span>Kihagyom</span>
+                <span>Tovább</span>
               </button>
 
               <button
@@ -852,7 +852,7 @@ export function FoodTinderSheet({
                 className="flex-1 max-w-[140px] h-14 rounded-2xl bg-gradient-to-r from-[#7AB116] to-[#5C870E] hover:brightness-105 text-white flex items-center justify-center gap-1.5 font-extrabold text-sm shadow-xl shadow-[#6FA014]/30 active:scale-95 transition disabled:opacity-30"
               >
                 <Heart className="w-5 h-5 fill-current" />
-                <span>Jöhet!</span>
+                <span>Választom</span>
               </button>
             </div>
           </>

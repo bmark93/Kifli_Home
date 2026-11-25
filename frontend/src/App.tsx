@@ -33,6 +33,7 @@ import {
   ImagePlus,
   LogOut,
   KeyRound,
+  PackageOpen,
 } from "lucide-react";
 import {
   apiFetch,
@@ -59,7 +60,7 @@ import { FoodTinderSheet } from "./FoodTinderSheet";
 import { PrivateLabelSwapModal } from "./PrivateLabelSwapModal";
 import { LoginView } from "./LoginView";
 
-type TabId = "menu" | "chat" | "cart" | "general" | "recipes" | "settings";
+type TabId = "menu" | "chat" | "cart" | "general" | "recipes" | "pantry" | "settings";
 
 const DAYS: Array<{ key: string; short: string; label: string }> = [
   { key: "hetfo", short: "H", label: "Hétfő" },
@@ -797,8 +798,16 @@ export default function App() {
       badge: pendingGeneralCount || undefined,
     },
     { id: "recipes", label: "Receptek", icon: UtensilsCrossed },
+    {
+      id: "pantry",
+      label: "Kamra",
+      icon: PackageOpen,
+      badge: staples.length || undefined,
+    },
     { id: "settings", label: "Beállítások", icon: Settings2 },
   ];
+
+  const mobileNavItems = navItems.filter((i) => i.id !== "settings");
 
   if (!authReady) {
     return (
@@ -1000,6 +1009,19 @@ export default function App() {
               : "⚠️ Kifli Login"}
           </span>
 
+          <button
+            type="button"
+            onClick={() => setActiveTab("settings")}
+            className={`p-2 rounded-xl border transition ${
+              activeTab === "settings"
+                ? "bg-emerald-500/15 border-emerald-500/35 text-emerald-700 dark:text-emerald-300"
+                : "bg-slate-100 dark:bg-white/5 border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300"
+            }`}
+            title="Beállítások"
+          >
+            <Settings2 className="w-4 h-4" />
+          </button>
+
           {authConfig.auth_required && currentUser && (
             <button
               type="button"
@@ -1054,7 +1076,7 @@ export default function App() {
                       className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-100 dark:text-emerald-300 bg-white/15 hover:bg-white/25 dark:bg-emerald-500/10 border border-white/20 dark:border-emerald-500/20 px-2.5 py-1 rounded-full mb-2 transition"
                     >
                       <Sparkles className="w-3.5 h-3.5" />
-                      {`${plannerSettings.household_size} fő · ${plannerSettings.plan_days} nap · 1 kaja ${plannerSettings.days_per_meal} napig ✎`}
+                      {`${plannerSettings.household_size} fő · ${plannerSettings.plan_days} nap · 1 fogás ${plannerSettings.days_per_meal} napra ✎`}
                     </button>
                     <h2 className="text-lg sm:text-2xl font-bold text-white">
                       Mit eszünk ezen a héten?
@@ -1814,7 +1836,7 @@ export default function App() {
                     type="submit"
                     className="col-span-4 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white dark:bg-emerald-500 dark:hover:bg-emerald-400 dark:text-slate-950 active:scale-95 font-bold text-sm flex items-center justify-center gap-1"
                   >
-                    <Plus className="w-4 h-4" /> Felír
+                    <Plus className="w-4 h-4" /> Hozzáadás
                   </button>
                 </div>
               </form>
@@ -1889,11 +1911,11 @@ export default function App() {
                                   }),
                                 });
                                 await Promise.all([loadCore(), loadSmartRestock()]);
-                                notify(`🧻 Felírva: ${sug.name}`);
+                                notify(`🧻 Hozzáadva a háztartási listához: ${sug.name}`);
                               }}
                               className="shrink-0 px-3 py-1.5 rounded-xl bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950 font-bold text-xs"
                             >
-                              + Felír
+                              + Hozzáadás
                             </button>
                           </div>
                         ))}
@@ -2133,33 +2155,228 @@ export default function App() {
           )}
 
           {/* =================================================================
-              6. TAB: KIFLI MCP OAUTH, KAMRA & KEDVENC MÁRKÁK (Widescreen 3-hasábos!)
+              6. TAB: KAMRA (Dedikált Kamra-alapanyagok + Kedvenc Márkák oldal!)
+             ================================================================= */}
+          {activeTab === "pantry" && (
+            <div className="space-y-5">
+              {/* Hero fejléc */}
+              <div className="rounded-3xl bg-gradient-to-br from-[#6FA014] via-[#5C870E] to-[#3F620A] dark:from-[#365314] dark:via-[#263B0F] dark:to-[#182210] p-5 sm:p-6 text-white shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-100 bg-white/15 border border-white/20 px-2.5 py-1 rounded-full mb-2">
+                    <PackageOpen className="w-3.5 h-3.5" />
+                    Otthoni készlet &amp; márkák
+                  </div>
+                  <h2 className="text-xl sm:text-2xl font-extrabold">Kamra &amp; Kedvencek</h2>
+                  <p className="text-xs sm:text-sm text-emerald-50/90 mt-1">
+                    Az itt szereplő alapanyagokat feltételezzük, hogy vannak otthon, így nem kerülnek bele feleslegesen minden heti kosárba.
+                  </p>
+                </div>
+                <div className="flex gap-3 shrink-0">
+                  <div className="rounded-2xl bg-white/15 backdrop-blur px-4 py-2.5 text-center border border-white/15">
+                    <div className="text-xl font-black">{staples.length}</div>
+                    <div className="text-[11px] text-emerald-100">Kamra tétel</div>
+                  </div>
+                  <div className="rounded-2xl bg-white/15 backdrop-blur px-4 py-2.5 text-center border border-white/15">
+                    <div className="text-xl font-black">{prefs.length}</div>
+                    <div className="text-[11px] text-emerald-100">Kedvenc márka</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+                {/* BAL / FŐ PANEL (8 oszlop): Kamra-alapanyagok áttekinthető kártyarácsban */}
+                <div className="xl:col-span-8 rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 className="font-bold text-base sm:text-lg text-slate-900 dark:text-white">
+                        🧂 Kamra-alapanyagok
+                      </h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Ezek az alapanyagok jellemzően megtalálhatók otthon — az AI a kosárösszeállításnál külön megkérdezi, ha mégis elfogyott volna valamelyik.
+                      </p>
+                    </div>
+                  </div>
+
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      if (!newStaple.trim()) return;
+                      await apiFetch("/api/staples", {
+                        method: "POST",
+                        body: JSON.stringify({ name: newStaple.trim() }),
+                      });
+                      setNewStaple("");
+                      await Promise.all([loadRecipesAndSettings(), loadCore()]);
+                      notify("🧂 Alapanyag hozzáadva a kamrához!");
+                    }}
+                    className="flex gap-2"
+                  >
+                    <input
+                      type="text"
+                      value={newStaple}
+                      onChange={(e) => setNewStaple(e.target.value)}
+                      placeholder="Új alapanyag (pl. mustár, fahéj, szójaszósz, oregánó)..."
+                      className="flex-1 bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white rounded-2xl px-4 py-3 text-sm border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#6FA014]"
+                    />
+                    <button
+                      type="submit"
+                      className="px-5 py-3 rounded-2xl bg-[#6FA014] hover:bg-[#5C870E] text-white font-bold text-xs sm:text-sm shrink-0 shadow-sm transition"
+                    >
+                      + Hozzáadás
+                    </button>
+                  </form>
+
+                  {/* Gyors-javaslatok, amik még nincsenek a kamrában */}
+                  {(() => {
+                    const existingKeys = new Set(staples.map((s) => s.display_name.toLowerCase()));
+                    const quickIdeas = [
+                      "mustár",
+                      "ketchup",
+                      "szójaszósz",
+                      "oregánó",
+                      "bazsalikom",
+                      "majoranna",
+                      "kömény",
+                      "fahéj",
+                      "sütőpor",
+                      "méz",
+                    ].filter((item) => !existingKeys.has(item));
+                    if (!quickIdeas.length) return null;
+                    return (
+                      <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                        <span className="text-slate-400 font-medium mr-1">Gyors felvétel:</span>
+                        {quickIdeas.slice(0, 6).map((idea) => (
+                          <button
+                            key={idea}
+                            type="button"
+                            onClick={async () => {
+                              await apiFetch("/api/staples", {
+                                method: "POST",
+                                body: JSON.stringify({ name: idea }),
+                              });
+                              await Promise.all([loadRecipesAndSettings(), loadCore()]);
+                            }}
+                            className="px-2.5 py-1 rounded-xl bg-slate-100 hover:bg-emerald-500/15 dark:bg-white/5 dark:hover:bg-emerald-500/20 text-slate-600 dark:text-slate-300 hover:text-emerald-700 dark:hover:text-emerald-300 border border-slate-200/80 dark:border-white/10 transition"
+                          >
+                            + {idea}
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })()}
+
+                  {staples.length === 0 ? (
+                    <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200 dark:border-white/5 p-8 text-center text-sm text-slate-500">
+                      Még nincs felvett kamra-alapanyag.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5 pt-1">
+                      {staples.map((s) => (
+                        <div
+                          key={s.key}
+                          className="group flex items-center justify-between gap-2 rounded-2xl bg-[#F6F6F2] dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 px-3.5 py-3 text-sm font-semibold text-slate-800 dark:text-slate-100"
+                        >
+                          <span className="truncate">{s.display_name}</span>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await apiFetch(`/api/staples/${encodeURIComponent(s.key)}`, {
+                                method: "DELETE",
+                              });
+                              await Promise.all([loadRecipesAndSettings(), loadCore()]);
+                            }}
+                            className="text-slate-400 hover:text-rose-500 p-1 rounded-lg hover:bg-rose-500/10 transition shrink-0"
+                            title="Eltávolítás a kamrából"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* JOBB PANEL (4 oszlop): Kedvenc Kifli termékek */}
+                <div className="xl:col-span-4 rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
+                  <div>
+                    <h3 className="font-bold text-base sm:text-lg text-slate-900 dark:text-white">
+                      ⭐ Kedvenc márkák
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                      A Kosár fülön bármelyik terméknél megjelölheted a ⭐ csillaggal — ezeket az AI előnyben részesíti, a sajátmárka-optimalizáló pedig külön megkérdez róluk.
+                    </p>
+                  </div>
+
+                  {prefs.length === 0 ? (
+                    <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200 dark:border-white/5 p-6 text-center text-xs text-slate-500">
+                      Még nincs rögzített kedvenc termék.
+                    </div>
+                  ) : (
+                    <div className="space-y-2.5">
+                      {prefs.map((p) => (
+                        <div
+                          key={p.ingredient_key}
+                          className="flex items-center justify-between gap-2 rounded-2xl bg-[#F6F6F2] dark:bg-[#121510] border border-slate-200/80 dark:border-white/5 px-3.5 py-3 text-xs"
+                        >
+                          <div className="min-w-0">
+                            <div className="font-bold text-emerald-700 dark:text-emerald-300 truncate">
+                              {p.ingredient_label}
+                            </div>
+                            <div className="text-slate-600 dark:text-slate-300 mt-0.5 line-clamp-2">
+                              {p.kifli_product_name}
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await apiFetch(`/api/preferences/${encodeURIComponent(p.ingredient_key)}`, {
+                                method: "DELETE",
+                              });
+                              await loadRecipesAndSettings();
+                            }}
+                            className="text-slate-400 hover:text-rose-500 p-1.5 rounded-lg hover:bg-rose-500/10 shrink-0"
+                            title="Eltávolítás"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* =================================================================
+              7. TAB: BEÁLLÍTÁSOK (Minden beállítás egy tiszta helyen!)
              ================================================================= */}
           {activeTab === "settings" && (
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
               {/* Kifli OAuth kártya */}
-              <div className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 space-y-4 shadow-sm dark:shadow-none">
+              <div className="lg:col-span-3 rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2.5">
                     <ShieldCheck className="w-5 h-5 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                    <h2 className="font-bold text-base text-slate-900 dark:text-white">
-                      Kifli.hu MCP
-                    </h2>
+                    <div>
+                      <h2 className="font-bold text-base text-slate-900 dark:text-white">
+                        Kifli.hu fiók összekötése (MCP)
+                      </h2>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        OAuth 2.1 biztonságos kapcsolat — a jelszavadat az alkalmazás nem látja és nem tárolja, a munkamenet automatikusan megújul.
+                      </p>
+                    </div>
                   </div>
                   <span
-                    className={`text-xs font-bold px-3 py-1 rounded-full ${
+                    className={`text-xs font-bold px-3 py-1 rounded-full shrink-0 ${
                       status?.kifli.authenticated
                         ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300"
                         : "bg-amber-500/15 text-amber-700 dark:text-amber-300"
                     }`}
                   >
-                    {status?.kifli.authenticated ? "Csatlakoztatva" : "Nincs belépve"}
+                    {status?.kifli.authenticated ? "Csatlakoztatva" : "Nincs összekötve"}
                   </span>
                 </div>
-
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  OAuth 2.1 PKCE kapcsolat: a jelszavadat soha nem látja és nem tárolja az app, a frissítő token pedig automatikusan megújul a szerveren.
-                </p>
 
                 <div className="flex flex-wrap gap-2.5">
                   <button
@@ -2180,11 +2397,11 @@ export default function App() {
                       onClick={async () => {
                         await apiFetch("/api/kifli/logout", { method: "POST" });
                         await loadCore();
-                        notify("Kijelentkezve a Kifli MCP-ből");
+                        notify("Kijelentkezve a Kifli.hu fiókból.");
                       }}
-                      className="px-4 py-2.5 rounded-2xl bg-slate-100 dark:bg-white/5 text-slate-700 dark:text-slate-300 text-xs"
+                      className="px-4 py-2.5 rounded-2xl bg-slate-100 dark:bg-white/5 text-slate-700 dark:text-slate-300 text-xs font-semibold"
                     >
-                      Kijelentkezés
+                      Kapcsolat bontása
                     </button>
                   )}
                 </div>
@@ -2201,7 +2418,7 @@ export default function App() {
                         setLoginUrl("");
                         setCallbackUrl("");
                         await loadCore();
-                        notify("✅ Kifli.hu sikeresen összekötve!");
+                        notify("✅ Kifli.hu fiók sikeresen összekötve!");
                       } catch (err: any) {
                         notify(err.message, "err");
                       }
@@ -2209,8 +2426,7 @@ export default function App() {
                     className="space-y-2 pt-3 border-t border-slate-200 dark:border-white/5"
                   >
                     <p className="text-xs text-amber-700 dark:text-amber-200">
-                      Ha távoli gépről vagy telefonról léptél be, másold be ide a kapott{" "}
-                      <code>http://localhost:3334/oauth/callback?code=...</code> címet:
+                      Belépés után a böngésző átirányít a <code>http://localhost:3334/oauth/callback?code=...</code> címre. Másold ki a címsorból a teljes URL-t és illeszd be ide:
                     </p>
                     <div className="flex gap-2">
                       <input
@@ -2232,122 +2448,23 @@ export default function App() {
                 )}
               </div>
 
-              {/* Kamra alapanyagok */}
-              <div className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 space-y-3 shadow-sm dark:shadow-none">
-                <h3 className="font-bold text-base text-slate-900 dark:text-white">
-                  🧂 Kamra-alapanyagok
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Ezeket alapból nem dobálja be minden héten a Kifli kosárba (só, bors, olaj, liszt...).
-                </p>
-                <form
-                  onSubmit={async (e) => {
-                    e.preventDefault();
-                    if (!newStaple.trim()) return;
-                    await apiFetch("/api/staples", {
-                      method: "POST",
-                      body: JSON.stringify({ name: newStaple.trim() }),
-                    });
-                    setNewStaple("");
-                    await loadRecipesAndSettings();
-                  }}
-                  className="flex gap-2"
-                >
-                  <input
-                    type="text"
-                    value={newStaple}
-                    onChange={(e) => setNewStaple(e.target.value)}
-                    placeholder="Pl. mustár, fahéj..."
-                    className="flex-1 bg-slate-100 dark:bg-[#121510] rounded-2xl px-4 py-2.5 text-sm border border-slate-200 dark:border-white/10"
-                  />
-                  <button
-                    type="submit"
-                    className="px-4 py-2.5 rounded-2xl bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950 font-bold text-xs shrink-0"
-                  >
-                    + Hozzáad
-                  </button>
-                </form>
-
-                <div className="flex flex-wrap gap-2 pt-1">
-                  {staples.map((s) => (
-                    <span
-                      key={s.key}
-                      className="inline-flex items-center gap-1.5 text-xs bg-slate-100 dark:bg-[#121510] border border-slate-200 dark:border-white/10 text-slate-700 dark:text-slate-200 px-3 py-1.5 rounded-full"
-                    >
-                      {s.display_name}
-                      <button
-                        onClick={async () => {
-                          await apiFetch(`/api/staples/${encodeURIComponent(s.key)}`, {
-                            method: "DELETE",
-                          });
-                          await loadRecipesAndSettings();
-                        }}
-                        className="text-slate-400 hover:text-rose-500"
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              {/* Kedvenc Kifli termékek */}
-              <div className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 space-y-3 shadow-sm dark:shadow-none">
-                <h3 className="font-bold text-base text-slate-900 dark:text-white">
-                  ⭐ Kedvenc Márkák
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  A Kosár fülön bármelyik terméknél rábökhetsz a ⭐ csillagra, és legközelebb mindig azt a márkát választja az AI!
-                </p>
-                {prefs.length === 0 ? (
-                  <p className="text-xs text-slate-500 italic">Még nincs rögzített kedvenc termék.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {prefs.map((p) => (
-                      <div
-                        key={p.ingredient_key}
-                        className="flex items-center justify-between rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/5 px-3.5 py-2.5 text-xs"
-                      >
-                        <div>
-                          <strong className="text-emerald-700 dark:text-emerald-300">
-                            {p.ingredient_label}
-                          </strong>{" "}
-                          → <span className="text-slate-700 dark:text-slate-200">{p.kifli_product_name}</span>
-                        </div>
-                        <button
-                          onClick={async () => {
-                            await apiFetch(`/api/preferences/${encodeURIComponent(p.ingredient_key)}`, {
-                              method: "DELETE",
-                            });
-                            await loadRecipesAndSettings();
-                          }}
-                          className="text-slate-400 hover:text-rose-500 p-1"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* 1. Kártya (Legfelül, teljes szélességű): ⚙️ HETI TERVEZŐ & FŐZÉS BEÁLLÍTÁSOK */}
+              {/* 1. Kártya (Legfelül, teljes szélességű): ⚙️ MENÜTERVEZŐ & BEVÁSÁRLÁS BEÁLLÍTÁSOK */}
               <div className="order-first lg:col-span-3 rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-5 sm:p-6 space-y-4 shadow-sm dark:shadow-none">
                 <div>
                   <h2 className="font-extrabold text-lg text-slate-900 dark:text-white">
-                    ⚙️ Menütervező &amp; Bevásárlás Beállítások
+                    ⚙️ Menütervező és bevásárlás beállítások
                   </h2>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    Minden beállítás egy helyen — az AI séf és az összesített bevásárlólista is azonnal ezekhez igazodik.
+                    Minden tervezési beállítás egy helyen — az AI séf és az összesített bevásárlólista azonnal ezekhez igazodik.
                   </p>
                 </div>
 
-                {/* Hány főre · Hány napra · 1 kaja hány napig */}
+                {/* Hány főre · Hány napra · Egy főtt étel hány napra készüljön */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   {/* Hány főre */}
                   <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
                     <div className="flex justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
-                      <span>👥 Hány főre?</span>
+                      <span>👥 Háztartás mérete (fő)</span>
                       <span className="text-emerald-600 dark:text-emerald-400">
                         {plannerSettings.household_size} fő
                       </span>
@@ -2376,7 +2493,7 @@ export default function App() {
                   {/* Hány napra */}
                   <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
                     <div className="flex justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
-                      <span>📅 Hány napra tervezzen?</span>
+                      <span>📅 Tervezett napok száma</span>
                       <span className="text-emerald-600 dark:text-emerald-400">
                         {plannerSettings.plan_days} nap
                       </span>
@@ -2402,17 +2519,17 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* 1 kaja hány napig */}
+                  {/* Egy főtt étel hány napra készüljön */}
                   <div className="rounded-2xl bg-slate-50 dark:bg-[#121510] border border-slate-200/80 dark:border-white/10 p-3.5 space-y-2">
                     <div className="flex justify-between text-xs font-bold text-slate-700 dark:text-slate-300">
-                      <span>🍲 1 kaja hány napig legyen?</span>
+                      <span>🍲 Egy főtt étel hány napra készüljön?</span>
                       <span className="text-emerald-600 dark:text-emerald-400">
                         {plannerSettings.days_per_meal} nap
                       </span>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
                       {[
-                        { v: 1, l: "1 nap (mindennap új)" },
+                        { v: 1, l: "1 nap (naponta új)" },
                         { v: 2, l: "2 nap" },
                         { v: 3, l: "3 nap" },
                         { v: 4, l: "4 nap" },
@@ -2804,7 +2921,7 @@ export default function App() {
          ===================================================================== */}
       <nav className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-white/95 dark:bg-[#151912]/95 backdrop-blur-2xl border-t border-slate-200 dark:border-white/10 pb-safe">
         <div className="grid grid-cols-6 px-1 pt-1.5">
-          {navItems.map((item) => {
+          {mobileNavItems.map((item) => {
             const Icon = item.icon;
             const active = activeTab === item.id;
             return (
