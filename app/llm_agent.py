@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -339,6 +340,120 @@ LOCAL_TOOLS_SPEC: list[dict[str, Any]] = [
 ]
 
 
+class _AnthropicAssistantMessage:
+    """OpenAI-kompatibilis wrapper az Anthropic Messages API válaszához."""
+
+    def __init__(self, content: str, tool_calls: list[Any]) -> None:
+        self.role = "assistant"
+        self.content = content
+        self.tool_calls = tool_calls or None
+
+    def model_dump(self, exclude_none: bool = True) -> dict[str, Any]:
+        out: dict[str, Any] = {"role": "assistant", "content": self.content}
+        if self.tool_calls:
+            out["tool_calls"] = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for tc in self.tool_calls
+            ]
+        elif not exclude_none:
+            out["tool_calls"] = None
+        return out
+
+
+def _convert_messages_to_anthropic(
+    messages: list[dict[str, Any]],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Átalakítja az OpenAI-stílusú üzenetlistát Anthropic Messages API formátumra."""
+    system_parts: list[str] = []
+    out: list[dict[str, Any]] = []
+
+    def _append_msg(role: str, blocks: list[dict[str, Any]]) -> None:
+        if out and out[-1]["role"] == role:
+            prev_c = out[-1]["content"]
+            if isinstance(prev_c, str):
+                prev_blocks = [{"type": "text", "text": prev_c}] if prev_c else []
+            else:
+                prev_blocks = list(prev_c)
+            out[-1]["content"] = prev_blocks + blocks
+        else:
+            out.append({"role": role, "content": blocks})
+
+    for m in messages:
+        role = m.get("role")
+        if role == "system":
+            txt = str(m.get("content") or "").strip()
+            if txt:
+                system_parts.append(txt)
+        elif role == "user":
+            txt = str(m.get("content") or "")
+            _append_msg("user", [{"type": "text", "text": txt}])
+        elif role == "assistant":
+            blocks: list[dict[str, Any]] = []
+            txt = str(m.get("content") or "").strip()
+            if txt:
+                blocks.append({"type": "text", "text": txt})
+            for tc in m.get("tool_calls") or []:
+                fn = tc.get("function") or {}
+                raw_args = fn.get("arguments") or "{}"
+                try:
+                    parsed_input = json.loads(raw_args) if isinstance(raw_args, str) else dict(raw_args)
+                except Exception:
+                    parsed_input = {}
+                blocks.append(
+                    {
+                        "type": "tool_use",
+                        "id": str(tc.get("id") or "tool_call"),
+                        "name": str(fn.get("name") or ""),
+                        "input": parsed_input if isinstance(parsed_input, dict) else {},
+                    }
+                )
+            if not blocks:
+                blocks.append({"type": "text", "text": ""})
+            _append_msg("assistant", blocks)
+        elif role == "tool":
+            _append_msg(
+                "user",
+                [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": str(m.get("tool_call_id") or ""),
+                        "content": str(m.get("content") or ""),
+                    }
+                ],
+            )
+
+    return "\n\n".join(system_parts), out
+
+
+def _convert_tools_to_anthropic(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    if not tools:
+        return []
+    out: list[dict[str, Any]] = []
+    for t in tools:
+        fn = t.get("function") or {}
+        name = fn.get("name")
+        if not name:
+            continue
+        schema = fn.get("parameters") or {"type": "object", "properties": {}}
+        if not isinstance(schema, dict) or schema.get("type") != "object":
+            schema = {"type": "object", "properties": {}}
+        out.append(
+            {
+                "name": name,
+                "description": fn.get("description") or "",
+                "input_schema": schema,
+            }
+        )
+    return out
+
+
 class ChefShoppingAgent:
     def __init__(
         self,
@@ -371,6 +486,10 @@ class ChefShoppingAgent:
             elif provider == "openai":
                 base_url = None
                 model = user.get("llm_model") or "gpt-4.1-mini"
+            elif provider in ("anthropic", "claude"):
+                provider = "anthropic"
+                base_url = "https://api.anthropic.com/v1/messages"
+                model = user.get("llm_model") or "claude-haiku-4-5-20251001"
             else:
                 base_url = user.get("llm_base_url") or "http://localhost:11434/v1"
                 model = user.get("llm_model") or "qwen2.5:14b"
@@ -409,19 +528,21 @@ class ChefShoppingAgent:
         if limit > 0 and used >= limit:
             raise RuntimeError(
                 f"Elérted a napi {limit} db ingyenes AI hívási limitet! "
-                "A ⚙️ Kamra fülön bármikor megadhatod a saját Gemini vagy OpenAI API kulcsodat a korlátlan használathoz."
+                "A ⚙️ Beállítások fülön bármikor megadhatod a saját Gemini, OpenAI vagy Claude API kulcsodat a korlátlan használathoz."
             )
         if limit > 0:
             self.db.increment_daily_ai_usage(user_id)
         return cfg
 
-    def _create_client(self, cfg: dict[str, Any] | None = None) -> AsyncOpenAI:
+    def _create_client(self, cfg: dict[str, Any] | None = None) -> AsyncOpenAI | None:
         c = cfg or self.resolve_llm_config_for_user(1)
         api_key = c["api_key"]
         if not api_key or "IDE_JON" in api_key:
             raise RuntimeError(
-                f"Hiányzik az AI API kulcs ({c['provider']}). Add meg a saját kulcsodat a ⚙️ Kamra → Saját AI API Kulcs fülön!"
+                f"Hiányzik az AI API kulcs ({c['provider']}). Add meg a saját kulcsodat a ⚙️ Beállítások → Saját AI API Kulcs résznél!"
             )
+        if c.get("provider") in ("anthropic", "claude"):
+            return None
         kwargs: dict[str, Any] = {
             "api_key": api_key,
             "timeout": 40.0,
@@ -431,9 +552,74 @@ class ChefShoppingAgent:
             kwargs["base_url"] = c["base_url"]
         return AsyncOpenAI(**kwargs)
 
+    async def _chat_completion_anthropic(
+        self,
+        api_key: str,
+        model: str,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        temperature: float = 0.3,
+    ) -> Any:
+        system_text, anth_messages = _convert_messages_to_anthropic(messages)
+        anth_tools = _convert_tools_to_anthropic(tools)
+
+        payload: dict[str, Any] = {
+            "model": model,
+            "max_tokens": 4096,
+            "temperature": temperature,
+            "messages": anth_messages,
+        }
+        if system_text:
+            payload["system"] = system_text
+        if anth_tools:
+            payload["tools"] = anth_tools
+
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=45.0) as http:
+            resp = await http.post(
+                "https://api.anthropic.com/v1/messages",
+                headers=headers,
+                json=payload,
+            )
+            if resp.status_code >= 400:
+                try:
+                    err_detail = resp.json().get("error", {}).get("message") or resp.text
+                except Exception:
+                    err_detail = resp.text
+                raise RuntimeError(f"Anthropic API hiba ({resp.status_code}): {err_detail}")
+            data = resp.json()
+
+        text_parts: list[str] = []
+        tool_calls: list[Any] = []
+        for block in data.get("content") or []:
+            btype = block.get("type")
+            if btype == "text":
+                text_parts.append(str(block.get("text") or ""))
+            elif btype == "tool_use":
+                tool_calls.append(
+                    SimpleNamespace(
+                        id=str(block.get("id") or "tool_call"),
+                        type="function",
+                        function=SimpleNamespace(
+                            name=str(block.get("name") or ""),
+                            arguments=json.dumps(block.get("input") or {}, ensure_ascii=False),
+                        ),
+                    )
+                )
+
+        msg = _AnthropicAssistantMessage(
+            content="\n".join(p for p in text_parts if p).strip(),
+            tool_calls=tool_calls,
+        )
+        return SimpleNamespace(choices=[SimpleNamespace(message=msg)])
+
     async def _chat_completion(
         self,
-        client: AsyncOpenAI,
+        client: AsyncOpenAI | None,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.3,
@@ -442,14 +628,39 @@ class ChefShoppingAgent:
         c = llm_cfg or {
             "provider": self.settings.llm_provider,
             "model": self.settings.llm_model,
+            "api_key": self.settings.llm_api_key,
         }
+        provider = (c.get("provider") or "gemini").strip().lower()
+
+        if provider in ("anthropic", "claude"):
+            candidates = [c["model"]]
+            for fallback_m in ("claude-haiku-4-5-20251001", "claude-sonnet-4-20250514", "claude-3-5-haiku-latest"):
+                if fallback_m not in candidates:
+                    candidates.append(fallback_m)
+            last_err: Exception | None = None
+            for mdl in candidates:
+                try:
+                    return await self._chat_completion_anthropic(
+                        api_key=c["api_key"],
+                        model=mdl,
+                        messages=messages,
+                        tools=tools,
+                        temperature=temperature,
+                    )
+                except Exception as exc:
+                    last_err = exc
+                    log.warning("Anthropic LLM hívás hiba (%s), próba a következővel ha van: %s", mdl, exc)
+            assert last_err is not None
+            raise last_err
+
+        assert client is not None
         candidates = [c["model"]]
-        if c["provider"] == "gemini":
+        if provider == "gemini":
             for fallback_m in ("gemini-3.1-flash-lite", "gemini-3.8-flash", "gemini-2.5-flash-lite"):
                 if fallback_m not in candidates:
                     candidates.append(fallback_m)
 
-        last_err: Exception | None = None
+        last_err = None
         for mdl in candidates:
             try:
                 call_kwargs: dict[str, Any] = {

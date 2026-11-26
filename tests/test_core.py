@@ -878,3 +878,78 @@ def test_household_account_linking_and_couple_tinder_day_sync(tmp_path: Path) ->
         assert left["is_owner"] is True
         assert len(left["members"]) == 1
 
+
+def test_anthropic_claude_api_byok_and_message_conversion(tmp_path: Path) -> None:
+    from app.llm_agent import _convert_messages_to_anthropic, _convert_tools_to_anthropic
+
+    # 1. OpenAI -> Anthropic üzenet & tool konverzió (több egymást követő tool_result összevonása)
+    sys_txt, anth_msgs = _convert_messages_to_anthropic(
+        [
+            {"role": "system", "content": "Te vagy a Séf."},
+            {"role": "user", "content": "Mit főzzünk?"},
+            {
+                "role": "assistant",
+                "content": "Megnézem!",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "list_saved_recipes", "arguments": '{"category":"ebed"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": '[{"title":"Lecsó"}]'},
+        ]
+    )
+    assert sys_txt == "Te vagy a Séf."
+    assert len(anth_msgs) == 3
+    assert anth_msgs[1]["role"] == "assistant"
+    assert anth_msgs[1]["content"][1]["type"] == "tool_use"
+    assert anth_msgs[1]["content"][1]["input"] == {"category": "ebed"}
+    assert anth_msgs[2]["role"] == "user"
+    assert anth_msgs[2]["content"][0]["type"] == "tool_result"
+
+    anth_tools = _convert_tools_to_anthropic(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_saved_recipes",
+                    "description": "Receptek",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+    )
+    assert anth_tools[0]["name"] == "list_saved_recipes"
+    assert "input_schema" in anth_tools[0]
+
+    # 2. BYOK mentés + feloldás Anthropic Claude API kulccsal
+    settings = _make_settings(tmp_path, auth_required=True)
+    app = create_app(custom_settings=settings, enable_background=False)
+    with TestClient(app) as client:
+        reg = client.post(
+            "/api/auth/register",
+            json={"email": "tapai@example.com", "password": "Password123", "display_name": "Tápai"},
+        )
+        uid = reg.json()["id"]
+        upd = client.put(
+            "/api/auth/llm-settings",
+            json={
+                "llm_provider": "anthropic",
+                "llm_model": "claude-sonnet-4-20250514",
+                "llm_api_key": "sk-ant-api03-TESTKEY1234567890",
+            },
+        )
+        assert upd.status_code == 200
+        llm_info = upd.json()["llm"]
+        assert llm_info["provider"] == "anthropic"
+        assert llm_info["model"] == "claude-sonnet-4-20250514"
+        assert llm_info["using_own_key"] is True
+
+        resolved = app.state.agent.resolve_llm_config_for_user(uid)
+        assert resolved["provider"] == "anthropic"
+        assert resolved["api_key"] == "sk-ant-api03-TESTKEY1234567890"
+        assert app.state.agent._create_client(resolved) is None
+
+
