@@ -57,6 +57,11 @@ def load_settings() -> Settings:
         base_url = None
         api_key = os.getenv("OPENAI_API_KEY", "").strip()
         model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini").strip()
+    elif provider in ("anthropic", "claude"):
+        provider = "anthropic"
+        base_url = "https://api.anthropic.com/v1/messages"
+        api_key = os.getenv("ANTHROPIC_API_KEY", "").strip()
+        model = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001").strip()
     else:
         base_url = os.getenv("CUSTOM_LLM_BASE_URL", "http://localhost:11434/v1").strip()
         api_key = os.getenv("CUSTOM_LLM_API_KEY", "ollama").strip()

@@ -207,6 +207,10 @@ export default function App() {
   const [kifliRecipes, setKifliRecipes] = useState<KifliRecipeItem[]>([]);
   const [kifliRecipesLive, setKifliRecipesLive] = useState<boolean>(false);
   const [recipeFilter, setRecipeFilter] = useState<string>("");
+  const [recipeSearch, setRecipeSearch] = useState<string>("");
+  const [recipeVisFilter, setRecipeVisFilter] = useState<"all" | "public" | "private">("all");
+  const [recipeHealthyOnly, setRecipeHealthyOnly] = useState<boolean>(false);
+  const [recipeSort, setRecipeSort] = useState<"newest" | "az" | "kcal_asc" | "healthy_desc">("newest");
   const [showNewRecipeSheet, setShowNewRecipeSheet] = useState(false);
   const [editingRecipeId, setEditingRecipeId] = useState<number | null>(null);
   const [tinderOpen, setTinderOpen] = useState<{
@@ -880,9 +884,35 @@ export default function App() {
   }, [recipes]);
 
   const filteredRecipes = useMemo(() => {
-    if (!recipeFilter) return recipes;
-    return recipes.filter((r) => r.categories.includes(recipeFilter));
-  }, [recipes, recipeFilter]);
+    const q = recipeSearch.trim().toLowerCase();
+    const list = recipes.filter((r) => {
+      if (recipeFilter && !r.categories.includes(recipeFilter)) return false;
+      if (recipeVisFilter === "public" && !r.is_public) return false;
+      if (recipeVisFilter === "private" && r.is_public) return false;
+      if (recipeHealthyOnly && (r.healthy_score || 3) < 4) return false;
+      if (q) {
+        const titleHit = r.title.toLowerCase().includes(q);
+        const ingHit = (r.ingredients || []).some((i) =>
+          (i.name || "").toLowerCase().includes(q)
+        );
+        if (!titleHit && !ingHit) return false;
+      }
+      return true;
+    });
+    const sorted = [...list];
+    if (recipeSort === "az") {
+      sorted.sort((a, b) => a.title.localeCompare(b.title, "hu"));
+    } else if (recipeSort === "kcal_asc") {
+      sorted.sort((a, b) => {
+        const ka = a.kcal_per_serving > 0 ? a.kcal_per_serving : 99999;
+        const kb = b.kcal_per_serving > 0 ? b.kcal_per_serving : 99999;
+        return ka - kb;
+      });
+    } else if (recipeSort === "healthy_desc") {
+      sorted.sort((a, b) => (b.healthy_score || 3) - (a.healthy_score || 3));
+    }
+    return sorted;
+  }, [recipes, recipeFilter, recipeSearch, recipeVisFilter, recipeHealthyOnly, recipeSort]);
 
   const pendingGeneralCount = generalItems.filter((g) => g.status === "PENDING").length;
   const inCartGeneralCount = generalItems.filter((g) => g.status === "IN_CART").length;
@@ -2194,26 +2224,138 @@ export default function App() {
 
               {recipeSubTab === "mine" ? (
                 <>
-                  <div className="flex gap-1.5 overflow-x-auto no-scrollbar">
-                    {[
-                      { v: "", l: "Összes" },
-                      { v: "reggeli", l: "🌅 Reggeli" },
-                      { v: "ebed", l: "🍲 Ebéd" },
-                      { v: "vacsora", l: "🌙 Vacsora" },
-                    ].map((f) => (
+                  {/* Kereső + Szűrősáv (kategória, láthatóság, egészséges, rendezés) */}
+                  <div className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-3.5 sm:p-4 space-y-3 shadow-sm dark:shadow-none">
+                    <div className="flex flex-col sm:flex-row gap-2.5">
+                      <div className="relative flex-1">
+                        <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                        <input
+                          type="text"
+                          value={recipeSearch}
+                          onChange={(e) => setRecipeSearch(e.target.value)}
+                          placeholder="Keresés receptnévre vagy hozzávalóra (pl. csirke, tészta, avokádó)..."
+                          className="w-full pl-10 pr-8 py-2.5 rounded-2xl bg-[#F6F6F2] dark:bg-[#121510] text-slate-900 dark:text-white text-xs sm:text-sm border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#6FA014]"
+                        />
+                        {recipeSearch && (
+                          <button
+                            type="button"
+                            onClick={() => setRecipeSearch("")}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 rounded-full text-slate-400 hover:text-slate-700 dark:hover:text-white"
+                            title="Keresés törlése"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+
+                      <select
+                        value={recipeSort}
+                        onChange={(e) =>
+                          setRecipeSort(
+                            e.target.value as "newest" | "az" | "kcal_asc" | "healthy_desc"
+                          )
+                        }
+                        className="px-3.5 py-2.5 rounded-2xl bg-[#F6F6F2] dark:bg-[#121510] text-slate-800 dark:text-slate-200 text-xs font-bold border border-slate-200 dark:border-white/10 focus:outline-none focus:border-[#6FA014]"
+                      >
+                        <option value="newest">Rendezés: Legújabb</option>
+                        <option value="az">Rendezés: A → Z</option>
+                        <option value="kcal_asc">Rendezés: Legkevesebb kcal</option>
+                        <option value="healthy_desc">Rendezés: Legegészségesebb</option>
+                      </select>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {[
+                        { v: "", l: "Összes" },
+                        { v: "reggeli", l: "🌅 Reggeli" },
+                        { v: "ebed", l: "🍲 Ebéd" },
+                        { v: "vacsora", l: "🌙 Vacsora" },
+                      ].map((f) => (
+                        <button
+                          type="button"
+                          key={f.v}
+                          onClick={() => setRecipeFilter(f.v)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition ${
+                            recipeFilter === f.v
+                              ? "bg-[#6FA014] text-white shadow-sm"
+                              : "bg-[#F6F6F2] dark:bg-[#121510] text-slate-700 dark:text-slate-300 border border-slate-200/80 dark:border-white/5"
+                          }`}
+                        >
+                          {f.l}
+                        </button>
+                      ))}
+
+                      <span className="w-px h-5 bg-slate-200 dark:bg-white/10 mx-1 hidden sm:inline-block" />
+
                       <button
-                        key={f.v}
-                        onClick={() => setRecipeFilter(f.v)}
-                        className={`px-3.5 py-2 rounded-2xl text-xs font-bold transition ${
-                          recipeFilter === f.v
-                            ? "bg-emerald-600 text-white dark:bg-emerald-500 dark:text-slate-950 shadow-sm"
-                            : "bg-white dark:bg-[#1C2218] text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-white/5"
+                        type="button"
+                        onClick={() => setRecipeHealthyOnly((v) => !v)}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition ${
+                          recipeHealthyOnly
+                            ? "bg-emerald-600 text-white border-emerald-600"
+                            : "bg-[#F6F6F2] dark:bg-[#121510] text-slate-700 dark:text-slate-300 border-slate-200/80 dark:border-white/5"
                         }`}
                       >
-                        {f.l}
+                        💚 Fitt (4–5)
                       </button>
-                    ))}
+
+                      {(
+                        [
+                          { v: "all", l: "Minden" },
+                          { v: "private", l: "🔒 Privát" },
+                          { v: "public", l: "🌍 Nyilvános" },
+                        ] as const
+                      ).map((vis) => (
+                        <button
+                          type="button"
+                          key={vis.v}
+                          onClick={() => setRecipeVisFilter(vis.v)}
+                          className={`px-2.5 py-1.5 rounded-xl text-xs font-bold border transition ${
+                            recipeVisFilter === vis.v
+                              ? "bg-slate-900 dark:bg-white text-white dark:text-slate-950 border-slate-900 dark:border-white"
+                              : "bg-[#F6F6F2] dark:bg-[#121510] text-slate-600 dark:text-slate-400 border-slate-200/80 dark:border-white/5"
+                          }`}
+                        >
+                          {vis.l}
+                        </button>
+                      ))}
+
+                      {(recipeSearch || recipeFilter || recipeVisFilter !== "all" || recipeHealthyOnly) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRecipeSearch("");
+                            setRecipeFilter("");
+                            setRecipeVisFilter("all");
+                            setRecipeHealthyOnly(false);
+                          }}
+                          className="ml-auto text-xs font-bold text-rose-600 dark:text-rose-400 hover:underline px-2"
+                        >
+                          Szűrők törlése ({filteredRecipes.length}/{recipes.length})
+                        </button>
+                      )}
+                    </div>
                   </div>
+
+                  {filteredRecipes.length === 0 ? (
+                    <div className="rounded-3xl bg-white dark:bg-[#1C2218] border border-slate-200/80 dark:border-white/5 p-8 text-center space-y-2">
+                      <p className="text-sm font-bold text-slate-700 dark:text-slate-200">
+                        Nincs a szűrésnek megfelelő recept.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRecipeSearch("");
+                          setRecipeFilter("");
+                          setRecipeVisFilter("all");
+                          setRecipeHealthyOnly(false);
+                        }}
+                        className="px-4 py-2 rounded-xl bg-[#6FA014] text-white text-xs font-bold"
+                      >
+                        Összes recept mutatása
+                      </button>
+                    </div>
+                  ) : null}
 
                   <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-4">
                     {filteredRecipes.map((r) => {
@@ -3575,12 +3717,14 @@ export default function App() {
                         setByokProvider(p);
                         if (p === "gemini") setByokModel("gemini-3.1-flash-lite");
                         else if (p === "openai") setByokModel("gpt-4.1-mini");
+                        else if (p === "anthropic") setByokModel("claude-haiku-4-5-20251001");
                         else setByokModel("qwen2.5:14b");
                       }}
                       className="w-full bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white rounded-xl px-3 py-2.5 text-xs border border-slate-200 dark:border-white/10"
                     >
                       <option value="gemini">Google Gemini API</option>
                       <option value="openai">OpenAI API</option>
+                      <option value="anthropic">Anthropic Claude API</option>
                       <option value="custom">Saját / Ollama (OpenAI-komp.)</option>
                     </select>
                   </div>
@@ -3591,9 +3735,30 @@ export default function App() {
                       type="text"
                       value={byokModel}
                       onChange={(e) => setByokModel(e.target.value)}
-                      placeholder="pl. gemini-3.1-flash-lite vagy gpt-4.1-mini"
+                      placeholder="pl. gemini-3.1-flash-lite, gpt-4.1-mini vagy claude-haiku-4-5-20251001"
                       className="w-full bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white rounded-xl px-3 py-2.5 text-xs border border-slate-200 dark:border-white/10"
                     />
+                    {byokProvider === "anthropic" && (
+                      <div className="flex flex-wrap gap-1 mt-1.5">
+                        {[
+                          { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5 (gyors)" },
+                          { id: "claude-sonnet-4-20250514", label: "Sonnet 4 (okos)" },
+                        ].map((m) => (
+                          <button
+                            type="button"
+                            key={m.id}
+                            onClick={() => setByokModel(m.id)}
+                            className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border ${
+                              byokModel === m.id
+                                ? "bg-[#6FA014] text-white border-[#6FA014]"
+                                : "bg-slate-100 dark:bg-[#121510] text-slate-600 dark:text-slate-300 border-slate-200 dark:border-white/10"
+                            }`}
+                          >
+                            {m.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   <div className="md:col-span-2">
@@ -3605,7 +3770,11 @@ export default function App() {
                         type="password"
                         value={byokApiKey}
                         onChange={(e) => setByokApiKey(e.target.value)}
-                        placeholder="AIzaSy... vagy sk-..."
+                        placeholder={
+                          byokProvider === "anthropic"
+                            ? "sk-ant-api03-..."
+                            : "AIzaSy..., sk-... vagy sk-ant-..."
+                        }
                         className="flex-1 bg-slate-100 dark:bg-[#121510] text-slate-900 dark:text-white rounded-xl px-3 py-2.5 text-xs border border-slate-200 dark:border-white/10"
                       />
                       <button

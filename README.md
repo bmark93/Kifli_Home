@@ -46,7 +46,7 @@ Saját szerveren / NAS-on (~35 MB RAM-os Docker konténerben) vagy felhőben (pl
 * **🧠 Smart Restock (0 AI token):** A Kifli rendelési előzményekből kiszámolja a fogyási ciklusokat, és 1 bökéssel visszateheted a listára, ami várhatóan elfogyott.
 
 ### 🔐 Többfelhasználós SaaS, Google Belépés & 1-Kattintásos Demo
-* **Email + jelszó (`scrypt`) & Sign in with Google (OAuth 2.0)** + titkosított, felhasználónkénti **BYOK AI API kulcs** (Gemini / OpenAI / Groq / Ollama).
+* **Email + jelszó (`scrypt`) & Sign in with Google (OAuth 2.0)** + titkosított, felhasználónkénti **BYOK AI API kulcs** (Google Gemini / OpenAI / **Anthropic Claude** / Ollama).
 * **1-kattintásos Demo fiók:** Teljesen elszigetelt, szimulált Kifli kosárral (`DemoCartSandbox`) és 0 AI-költségű bemutató móddal — regisztráció nélkül azonnal kipróbálható.
 * **Hard Checkout fék:** Az AI soha nem ad le fizetős rendelést helyetted — csak összerakja a kosarat, te pedig átnézed és megrendeled a Kifli.hu-n.
 
